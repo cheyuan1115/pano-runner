@@ -34,12 +34,6 @@ uniform float uOff;           // 這一片在相機座標系裡的水平偏移�
 uniform vec3 uTravel;         // 行進方向（已轉到這顆全景的影像經度座標系）
 uniform float uT, uR;         // 相機沿行進方向平移多少公尺、場景近似半徑
 uniform float uPanoPos;       // 這顆全景在共用世界座標裡的位置（沿行進方向，公尺）
-uniform sampler2D uPIdx;      // 512×256，每像素的平面索引
-uniform sampler2D uPNrm;      // 256×1，每個平面的法向
-uniform sampler2D uPDst;      // 256×1，每個平面的距離（16 bit）
-uniform float uHasDepth;      // 這顆全景有沒有深度圖
-uniform float uPanoYaw;       // 這顆全景的偏轉角（弧度），深度圖要用它對齊
-uniform float uDbgDepth;      // 除錯：把「有沒有用到深度圖」畫成顏色
 uniform float uCyl;           // 0 = 多片直線透視／1 = Panini 連續投影
 uniform float uKx, uKy, uD;   // Panini：水平尺度、垂直尺度、鏡頭距離參數
 uniform float uFadeA, uFadeB; // 底部淡出：從這個緯度開始，到這個緯度全暗（弧度）
@@ -47,10 +41,7 @@ uniform float uCamH;          // 相機離地高度（公尺）。0 = 不用地�
 uniform vec2 uBaseScale, uDetScale;
 uniform float uDetS0, uDetSpanS, uDetT0, uDetSpanT, uHasDet;
 const float PI = 3.14159265358979;
-bool gotDepth;
-float dbgS2;
 void main() {
-  gotDepth = false; dbgS2 = -1.0;
   vec3 d;
   if (uCyl > 0.5) {
     // 連續投影，沒有接縫可以折。uD < 0 是圓柱，否則是 Panini。
@@ -108,45 +99,12 @@ void main() {
     // 先前是各自以自己為球心、各自用自己的相機位移，等於在描述兩個不同的世界 ——
     // 實測轉場中點時同一條射線的方位角差到 12.9°，溶解時兩張圖對不齊。
     vec3 cam = uT * uTravel;
-    vec3 pt = vec3(0.0);
-    gotDepth = false;
-
-    if (uHasDepth > 0.5) {
-      // 逐像素深度。Google 的深度圖是分段平面的（地面一面、每棟建築立面一面），
-      // 所以只要查出這條射線落在哪個平面，就能用射線與平面的交點解析求解 ——
-      // 不需要 ray marching。近似只在於「用大略方向去查平面」。
-      //
-      // 深度圖的座標是 z 軸朝上、方位角從影像 x 直接換算，而我們的世界座標
-      // 是 y 軸朝上、+z 朝向影像中央（也就是 uPanoYaw 那個方位）。要換過去。
-      // 深度圖跟全景影像是同一個等距長方座標系，所以查表方式要跟取樣影像
-      // 完全一樣：u = fract(lon/2π + 0.5)。先前多加了一次 uPanoYaw 又少了 0.5，
-      // 等於查到別的方位去 —— 不過地面的法向與方位無關，所以看不出來。
-      vec3 u0 = normalize(cam + 30.0 * w);       // 先用名目距離估個方向
-      float az0 = atan(u0.x, u0.z);
-      float el0 = asin(clamp(u0.y, -1.0, 1.0));
-      vec2 duv = vec2(fract(az0 / (2.0 * PI) + 0.5), 0.5 - el0 / PI);
-      float pi = texture2D(uPIdx, duv).r;
-      if (pi > 0.002) {                          // 0 = 天空
-        vec4 nn = texture2D(uPNrm, vec2(pi, 0.5));
-        vec4 dd = texture2D(uPDst, vec2(pi, 0.5));
-        vec3 nD = nn.xyz * 2.0 - 1.0;            // 深度圖座標系（z 上）的法向
-        float pd = (dd.r * 255.0 * 256.0 + dd.g * 255.0) / 100.0;
-        // 法向轉回我們的世界座標：繞 y 軸轉 −uPanoYaw，並把 z↔y 交換
-        float cy2 = cos(-uPanoYaw), sy2 = sin(-uPanoYaw);
-        vec3 nW = vec3(nD.x * cy2 + nD.y * sy2, nD.z, -nD.x * sy2 + nD.y * cy2);
-        float den = dot(w, nW);
-        if (abs(den) > 1e-4) {
-          // 平面是 p·n = d（由 t = |d/(v·n)| 反推：t·v·n = d）。
-          // 先前寫成 −(cam·n + d)/den，正負號反了 —— 地面會算出負的距離，
-          // 被 s2 > 0.3 擋掉而退回球面，所以「99% 走了深度路徑」卻毫無效果。
-          float s2 = (pd - dot(cam, nW)) / den;
-          dbgS2 = s2;
-          if (s2 > 0.3 && s2 < 400.0) { pt = cam + s2 * w; gotDepth = true; }
-        }
-      }
-    }
-    if (!gotDepth) {
-      // 退回球面近似（沒有深度圖、天空、或解出來不合理時）
+    float depthPlane = (uCamH > 0.0 && w.y < -0.001) ? uCamH / (-w.y) : 1e9;
+    vec3 pt;
+    if (depthPlane < uR) {
+      pt = cam + depthPlane * w;                 // 地面：與 y = −相機高度 的交點
+    } else {
+      // 以原點（現在這顆全景）為球心、半徑 uR 的球面
       float b = dot(cam, w);
       float c = dot(cam, cam) - uR * uR;
       pt = cam + (-b + sqrt(max(b * b - c, 0.0))) * w;
@@ -169,13 +127,6 @@ void main() {
   // 實測相鄰像素差：−20° 是 10.8、−40° 剩 6.2、−60° 只有 1.8、正下方 0.06。
   // 與其讓它糊在畫面裡，不如順順地暗掉，看起來像陰影而不是失誤。
   float fade = 1.0 - smoothstep(uFadeA, uFadeB, -lat);
-  if (uDbgDepth > 0.5) {
-    // 把算出來的距離編進 R+G（16 bit，單位 0.1 m），B 標示有沒有採用
-    float v = clamp(dbgS2 < 0.0 ? 0.0 : dbgS2, 0.0, 400.0) * 10.0;
-    gl_FragColor = vec4(floor(v / 256.0) / 255.0, mod(v, 256.0) / 255.0,
-                        gotDepth ? 1.0 : 0.0, 1.0);
-    return;
-  }
   gl_FragColor = vec4(c.rgb * mix(0.12, 1.0, fade), uAlpha);
 }`;
 
@@ -244,10 +195,6 @@ const S = {
   // 每片的水平視野。要「幾何正確」（畫面裡的角度＝眼睛看到的角度），
   // 這個值應該等於螢幕在你眼中的實際張角：2·atan(螢幕可視寬/2 ÷ 觀看距離)。
   // 設得比實際張角大＝廣角效果，看起來比較有速度感但比例被壓縮。
-  // 總視野才是來源，每片視野一律推導：hFovPer = clamp(totalFov / panels, 20, 110)。
-  // 先前把 hFovPer 當來源、換片數時去乘除，一旦被夾住（例如單片時 210 → 110）
-  // 總視野就永久掉下來回不去了。
-  totalFov: 210,
   hFovPer: 70,
   // 實體三螢幕用：邊框補償（像素）。三片各在一台螢幕上時，兩台之間的邊框
   // 會遮掉一段畫面；把 bezel 設成「邊框寬度換算成的像素數」，那一段就不畫，
@@ -265,22 +212,15 @@ const S = {
   // 改成由倍率反推 R = d / (1 − 1/M)，每一步的推近感就一致，
   // 側移量 t/R = 1 − 1/M 也跟著固定，不管連結是 5 公尺還是 20 公尺。
   zoomPer: 1.35,
-  autoDepth: true,                      // 場景深度由深度圖自動判定
-  // 逐像素平面深度。**預設關閉，因為我沒能證明它有效。**
-  // 現況：深度圖解碼正確（相機高、場景深度都驗證過）、貼圖有建起來（189 個平面）、
-  // uniform 實測都有設到（uHasDepth=1、uT=6、uPanoYaw=2.01）、shader 編譯連結成功、
-  // 除錯視圖顯示 99.3% 的像素走進深度分支 —— 但把分支強制回傳固定 5 公尺
-  //（應該徹底破壞畫面）也只讓平均像素差從 0.20 變 0.25，等於毫無作用。
-  // 也就是說這段程式看起來全部到位卻不影響輸出，原因未明，不要當成能用。
-  // 已經驗證有效的是另外兩項：每顆全景的相機高度、以及自動場景深度。
-  useDepth: false,
-  dbgDepth: false,                      // 除錯視圖：綠＝用到深度圖、紅＝退回球面
   dissolveMs: 260,                      // 溶解只佔中間這麼久
   sceneR: 38,                           // 由 zoomPer 與步距算出來的，只是顯示用
   // 地平面模型：往下看的射線改用「相機高度 / 俯角」當深度，路面的流動才對。
   // 預設關掉 —— 近處的車子不在地平面上卻被當成地面投影，會被拉成一團。
   // 用 h 鍵開關；街景拍攝車的相機大約離地 2.5 公尺。
+  // 相機離地高度。0 = 關閉地平面模型。
+  // 開啟時用該顆全景自己的高度（從深度圖讀），不是寫死的值。
   camH: 0,
+  useGround: true,                      // 地平面模型開關（H 鍵）
   running: false, kmh: 12, travelDir: 0,
   mic: false, micKmh: null, micAt: 0, micHeld: false, kmhCap: 12,
   voice: false,
@@ -365,54 +305,12 @@ function tileWindow(meta, heading) {
 }
 
 const mkPano = () => ({ meta: null, texBase: mkTex(), texDet: mkTex(),
-                        baseScale: [1, 1], det: null, tiles: 0, depth: null });
-
-// 把深度圖解成三張貼圖：每像素的平面索引、每個平面的法向與距離。
-// 為什麼不直接存深度值：8 bit 的深度精度不夠（地面只有 2.5 m，誤差會到 20%），
-// 但平面索引本來就是 8 bit 的整數，存進去是精確的，
-// 平面參數再用兩張 256×1 的小貼圖查 —— 距離用 16 bit，精度 0.01 m。
-function buildDepth(P, b64) {
-  if (!b64) { P.depth = null; return; }
-  let raw;
-  try {
-    const bin = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
-    raw = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
-  } catch { P.depth = null; return; }
-  const dv = new DataView(raw.buffer);
-  const n = dv.getUint16(1, true), w = dv.getUint16(3, true);
-  const h = dv.getUint16(5, true), off = dv.getUint16(7, true);
-  if (8 + w * h + n * 16 !== raw.length || n > 255) { P.depth = null; return; }
-
-  const idxTex = new Uint8Array(w * h * 4);
-  for (let i = 0; i < w * h; i++) idxTex[i * 4] = raw[off + i];   // 索引放 R
-  const nrm = new Uint8Array(256 * 4), dst = new Uint8Array(256 * 4);
-  for (let i = 0; i < n; i++) {
-    const o = off + w * h + i * 16;
-    for (let k = 0; k < 3; k++)
-      nrm[i * 4 + k] = Math.max(0, Math.min(255, Math.round((dv.getFloat32(o + k * 4, true) * 0.5 + 0.5) * 255)));
-    nrm[i * 4 + 3] = 255;
-    const d16 = Math.max(0, Math.min(65535, Math.round(Math.abs(dv.getFloat32(o + 12, true)) * 100)));
-    dst[i * 4] = d16 >> 8; dst[i * 4 + 1] = d16 & 255; dst[i * 4 + 3] = 255;
-  }
-  const up = (tex, ww, hh, data) => {
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, ww, hh, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
-  };
-  const d = { idx: gl.createTexture(), nrm: gl.createTexture(), dst: gl.createTexture(), n };
-  up(d.idx, w, h, idxTex); up(d.nrm, 256, 1, nrm); up(d.dst, 256, 1, dst);
-  P.depth = d;
-}
+                        baseScale: [1, 1], det: null, tiles: 0 });
 
 async function load(P, panoId, heading) {
   const meta = await (await fetch('/api/meta?pano=' + encodeURIComponent(panoId))).json();
   if (meta.error) { S.note = meta.error; return false; }
   P.meta = meta; P.det = null; P.tiles = 0;
-  buildDepth(P, meta.depth && meta.depth.b64);
 
   const TSb = meta.geom.tile, gb = meta.geom.zooms[BASE_ZOOM];
   const cb = Math.ceil(gb.w / TSb), rb = Math.ceil(gb.h / TSb);
@@ -472,22 +370,12 @@ function drawOne(P, alpha, tanHalf, aspect, tMove, off, panoPos) {
   gl.uniform1f(U('uT'), tMove || 0);
   gl.uniform1f(U('uPanoPos'), panoPos || 0);
   gl.uniform1f(U('uR'), S.sceneR);
-  gl.uniform1f(U('uCamH'), S.camH);
+  // 用這顆全景自己的相機高度
+  gl.uniform1f(U('uCamH'), S.useGround ? (P.meta.camH || 0) : 0);
   gl.uniform1f(U('uCyl'), S.proj === 'pan' ? 1 : 0);
   gl.uniform1f(U('uD'), S.paniniD);
   gl.uniform1f(U('uFadeA'), rad(S.fadeFrom));
   gl.uniform1f(U('uFadeB'), rad(S.fadeTo));
-  // 深度圖（索引、法向、距離）。沒有就退回球面近似。
-  const dp = P.depth;
-  gl.uniform1f(U('uHasDepth'), (dp && S.useDepth) ? 1 : 0);
-  gl.uniform1f(U('uPanoYaw'), rad(P.meta.yaw || 0));
-  gl.uniform1f(U('uDbgDepth'), S.dbgDepth ? 1 : 0);
-  if (dp) {
-    gl.uniform1i(U('uPIdx'), 2); gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, dp.idx);
-    gl.uniform1i(U('uPNrm'), 3); gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, dp.nrm);
-    gl.uniform1i(U('uPDst'), 4); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, dp.dst);
-    gl.activeTexture(gl.TEXTURE0);
-  }
   const d = P.det;
   gl.uniform1f(U('uHasDet'), d ? 1 : 0);
   if (d) {
@@ -537,18 +425,12 @@ function drawInner() {
     // 中央的像素是方的，所以由「下緣要停在哪」反推高度。
     const hs = rad(S.span / 2), D = S.paniniD;
     const sc = D < 0 ? hs : Math.sin(hs) * (D + 1) / (D + Math.cos(hs));
-    const need = Math.round(Math.tan(rad(S.bottomDeg)) * w / sc);
+    const need = Math.round(Math.tan(rad(S.bottomDeg + S.pitch)) * w / sc);
     if (need <= h) { vh = need; y0 = Math.round((h - vh) / 2); }
   }
   if (S.fit && S.proj !== 'pan') {
-    // 垂直視野只由「下緣角度」決定，**不要把仰角加進來**。
-    // 先前寫成 2×(下緣 + 仰角)，本意是讓下緣固定在 −26°，但副作用是
-    // 仰角在改變視野大小而不是旋轉視角：往上拖到 pitch < −26 時 fov 變負數，
-    // 畫面直接上下翻轉。仰角應該純粹旋轉，下緣跟著一起移動才是對的
-    //（抬頭本來就該讓下方的馬賽克掉出畫面）。
-    S.fov = 2 * S.bottomDeg;
-    const hf = Math.max(20, Math.min(110, S.hFovPer));
-    const need = Math.round(pw * Math.tan(rad(S.fov / 2)) / Math.tan(rad(hf / 2)));
+    S.fov = 2 * (S.bottomDeg + S.pitch);
+    const need = Math.round(pw * Math.tan(rad(S.fov / 2)) / Math.tan(rad(S.hFovPer / 2)));
     if (need <= h) { vh = need; y0 = Math.round((h - vh) / 2); }
     else { S.fov = 2 * Math.atan(Math.tan(rad(S.hFovPer / 2)) * h / pw) * 180 / Math.PI; }
   }
@@ -603,8 +485,8 @@ function drawInner() {
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
     + (S.mic ? `🎙 ${window.__cad?.spm ? Math.round(window.__cad.spm) + ' spm' : '聽…'}   ` : '')
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
-    + `深度 ${S.sceneR.toFixed(0)}m${S.autoDepth ? '(自動)' : ''}`
-    + `${S.useDepth && S.cur.depth ? '+逐像素' : ''}   `
+    + `推近 ${S.zoomPer.toFixed(2)}×`
+    + `${S.useGround ? `　地面 ${(m.camH || 0).toFixed(2)}m` : '　地面關'}   `
     + `${S.steps} 步 ${(S.moved / 1000).toFixed(2)} km`
     + (S.track.length ? `　紀錄 ${S.track.length} 點（按 s 匯出 GPX）` : '') + '\n'
     + `這顆 ${S.cur.tiles} 塊　等 ${Math.round(S.lastMs)} ms　排隊 ${queue.length}　`
@@ -749,12 +631,8 @@ async function stepOnce() {
   // 停 2.1 秒，七成時間畫面是靜止的，跑起來一頓一頓。跑愈慢愈明顯。
   const span = Math.max(240, d / Math.max(1, S.kmh / 3.6) * 1000);
   S.nxt = P; S.stepD = d;
-  // 場景半徑：優先用深度圖量到的這條街的實際寬度，
-  // 拿不到才退回「由推近倍率反推」。實測香榭麗舍深度圖給 39.7 m，
-  // 而使用者手動調出來的 1.35 倍換算是 38.6 m —— 兩邊獨立吻合。
-  const auto = S.autoDepth && S.cur && S.cur.meta && S.cur.meta.sceneR;
-  S.sceneR = auto ? S.cur.meta.sceneR
-                  : Math.max(6, d / (1 - 1 / Math.max(1.05, S.zoomPer)));
+  // 由這一步的實際距離與目標倍率算出場景半徑
+  S.sceneR = Math.max(6, d / (1 - 1 / Math.max(1.05, S.zoomPer)));
   // 溶解只壓在中間這一小段。兩顆全景在轉場中都被扭曲（誤差隨平移量變大），
   // 同時各佔一半的時候重影最重 —— 所以讓大部分時間只看到其中一顆，
   // 中間快速交換。這就是你說的「先推近、再切」，只是切的那一下用溶解接。
@@ -1085,14 +963,10 @@ function voiceBanner() {
 // 切得越細，接縫的折角越小（實測 210° 總視野：3 片折 16.9°、5 片 6.2°、7 片 3.2°），
 // 而且每片越窄、直線透視的拉伸越少，中央解析度反而更好（12.2 → 13.4 px/度）。
 // 極限就是圓柱投影。單一平面螢幕上，片數多是純粹的好處。
-// 每片一定要夾在 110° 以內。直線透視超過 180° 在數學上不存在，tan(半角) 會變負的
-// —— 實測單片時把 210° 全塞給一片，繪製高度算出負值，畫面縮成角落一小條。
-// 110° 以上邊緣也已經拉到不能看。
-const applyFov = () => { S.hFovPer = Math.max(20, Math.min(110, S.totalFov / S.panels)); };
-
 function setPanels(n) {
+  const total = S.hFovPer * S.panels;
   S.panels = Math.max(1, Math.min(9, n));
-  applyFov();
+  S.hFovPer = total / S.panels;
   S.proj = 'flat';
 }
 
@@ -1105,8 +979,7 @@ const TUNE = [
   ['diss', 'dissolveMs', v => `${v} ms`],
   // 這一格調的是「總視野」而不是每片 —— 每片的值會隨片數變，
   // 拿它當旋鈕的話換片數後意義就跑掉了，使用者無從理解。
-  // 實際畫出來的可能比設定值小（每片被夾在 110° 以內），所以兩個都顯示
-  ['hfov', 'totalFov',  v => `${v}°　實得 ${Math.round(S.hFovPer * S.panels)}°`],
+  ['hfov', 'totalFov',  v => `${v}°　每片 ${(v / S.panels).toFixed(0)}°`],
   ['bot',  'bottomDeg', v => `−${v}°`],
   ['kmh',  'kmh',       v => `${v} km/h`],
   ['pan',  'panels',    v => `${v} 片　每片 ${(S.hFovPer).toFixed(0)}°`],
@@ -1116,7 +989,7 @@ if (tune) {
   const sync = () => {
     for (const [id, key, fmt] of TUNE) {
       const el = document.getElementById('t-' + id);
-      const val = key === 'totalFov' ? S.totalFov : S[key];
+      const val = key === 'totalFov' ? Math.round(S.hFovPer * S.panels) : S[key];
       if (document.activeElement !== el) el.value = val;
       document.getElementById('v-' + id).textContent = fmt(val);
     }
@@ -1124,7 +997,7 @@ if (tune) {
   for (const [id, key] of TUNE) {
     document.getElementById('t-' + id).addEventListener('input', e => {
       if (key === 'panels') setPanels(+e.target.value);        // 要連帶改每片視野
-      else if (key === 'totalFov') { S.totalFov = +e.target.value; applyFov(); }
+      else if (key === 'totalFov') S.hFovPer = +e.target.value / S.panels;
       else S[key] = +e.target.value;
       if (key === 'kmh') S.kmhCap = S.kmh;
       sync(); draw();
@@ -1153,7 +1026,7 @@ addEventListener('mouseup', () => { dragging = false; cv.classList.remove('drag'
 addEventListener('mousemove', e => {
   if (!dragging) return;
   S.heading += (e.clientX - lastX) * 0.18;
-  S.pitch = Math.max(-35, Math.min(35, S.pitch + (e.clientY - lastY) * 0.12));
+  S.pitch = Math.max(-50, Math.min(50, S.pitch + (e.clientY - lastY) * 0.12));
   lastX = e.clientX; lastY = e.clientY;
   draw(); if (!S.running) reloadSoon();
 });
@@ -1188,9 +1061,9 @@ addEventListener('keydown', e => {
   else if (e.key === 'b') S.fit = !S.fit;
   else if (e.key === 'h') {                       // 總視野循環
     const T = [120, 150, 180, 210, 240, 280];
-    const i = T.findIndex(x => x > S.totalFov + 1);
-    S.totalFov = T[i < 0 ? 0 : i];
-    applyFov();
+    const cur = Math.round(S.hFovPer * S.panels);
+    const i = T.findIndex(x => x > cur + 1);
+    S.hFovPer = T[i < 0 ? 0 : i] / S.panels;
   }
   else if (e.key === 't') { openWing(); return; }
   else if (e.key === 'g') S.gap = !S.gap;
@@ -1204,9 +1077,7 @@ addEventListener('keydown', e => {
     const i = M.findIndex(x => Math.abs(x - S.zoomPer) < 0.01);
     S.zoomPer = M[(i + 1) % M.length];
   }
-  else if (e.key === 'H') S.useDepth = !S.useDepth;          // 逐像素深度開關
-  else if (e.key === 'A') S.autoDepth = !S.autoDepth;        // 自動場景深度
-  else if (e.key === 'D') S.dbgDepth = !S.dbgDepth;          // 深度除錯視圖
+  else if (e.key === 'H') S.useGround = !S.useGround;   // 地平面模型（大寫 H）
   else return;
   draw(); if (!S.running) reloadSoon();
 });
@@ -1237,17 +1108,15 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (S.panelIdx !== null) S.panels = 3;
   if (q.has('panels') && S.panelIdx === null) {
     // 網址給的片數要保持總視野 —— 預設 3 片 × 70° = 210°
-    S.panels = Math.max(1, Math.min(9, +q.get('panels')));
-    applyFov();
+    const n = Math.max(1, Math.min(9, +q.get('panels')));
+    S.hFovPer = (S.hFovPer * 3) / n; S.panels = n;
   }
   if (q.has('bottom')) S.bottomDeg = +q.get('bottom');
-  if (q.has('total')) { S.totalFov = +q.get('total'); applyFov(); }
   if (q.has('hfov')) S.hFovPer = +q.get('hfov');
   // 直接給螢幕尺寸與距離，程式自己算出幾何正確的水平視野。
   // sw = 單片可視寬度(mm)（單螢幕就是整片寬），dist = 眼睛到螢幕(mm)
   if (q.has('sw') && q.has('dist')) {
     S.hFovPer = 2 * Math.atan(+q.get('sw') / 2 / +q.get('dist')) * 180 / Math.PI;
-    S.totalFov = S.hFovPer * S.panels;
   }
   if (q.get('gap') === '1') S.gap = true;
   if (q.has('bezel')) S.bezel = +q.get('bezel');
@@ -1294,5 +1163,5 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   addEventListener('pagehide', saveTrack);
   addEventListener('visibilitychange', () => { if (document.hidden) saveTrack(); });
   // 語音狀態會變，讓收合的 HUD 也跟著更新
-  setInterval(() => { if (!S.running && !window.__noAuto) draw(); }, 1000);
+  setInterval(() => { if (!S.running) draw(); }, 1000);
 })();
