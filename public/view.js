@@ -217,12 +217,7 @@ const S = {
   // 地平面模型：往下看的射線改用「相機高度 / 俯角」當深度，路面的流動才對。
   // 預設關掉 —— 近處的車子不在地平面上卻被當成地面投影，會被拉成一團。
   // 用 h 鍵開關；街景拍攝車的相機大約離地 2.5 公尺。
-  // 相機離地高度。0 = 關閉地平面模型。
-  // 開啟時用該顆全景自己的高度（從深度圖讀），不是寫死的值。
   camH: 0,
-  // 地平面模型預設關閉 —— 使用者實測「不好」。
-  // 相機高度已經是每顆全景各自的正確值，要試的話按 H 打開。
-  useGround: false,
   running: false, kmh: 12, travelDir: 0,
   mic: false, micKmh: null, micAt: 0, micHeld: false, kmhCap: 12,
   voice: false,
@@ -372,8 +367,7 @@ function drawOne(P, alpha, tanHalf, aspect, tMove, off, panoPos) {
   gl.uniform1f(U('uT'), tMove || 0);
   gl.uniform1f(U('uPanoPos'), panoPos || 0);
   gl.uniform1f(U('uR'), S.sceneR);
-  // 用這顆全景自己的相機高度
-  gl.uniform1f(U('uCamH'), S.useGround ? (P.meta.camH || 0) : 0);
+  gl.uniform1f(U('uCamH'), S.camH);
   gl.uniform1f(U('uCyl'), S.proj === 'pan' ? 1 : 0);
   gl.uniform1f(U('uD'), S.paniniD);
   gl.uniform1f(U('uFadeA'), rad(S.fadeFrom));
@@ -487,8 +481,7 @@ function drawInner() {
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
     + (S.mic ? `🎙 ${window.__cad?.spm ? Math.round(window.__cad.spm) + ' spm' : '聽…'}   ` : '')
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
-    + `推近 ${S.zoomPer.toFixed(2)}×`
-    + `${S.useGround ? `　地面 ${(m.camH || 0).toFixed(2)}m` : '　地面關'}   `
+    + `推近 ${S.zoomPer.toFixed(2)}×${S.camH ? '+地面' : ''}   `
     + `${S.steps} 步 ${(S.moved / 1000).toFixed(2)} km`
     + (S.track.length ? `　紀錄 ${S.track.length} 點（按 s 匯出 GPX）` : '') + '\n'
     + `這顆 ${S.cur.tiles} 塊　等 ${Math.round(S.lastMs)} ms　排隊 ${queue.length}　`
@@ -1079,7 +1072,7 @@ addEventListener('keydown', e => {
     const i = M.findIndex(x => Math.abs(x - S.zoomPer) < 0.01);
     S.zoomPer = M[(i + 1) % M.length];
   }
-  else if (e.key === 'H') S.useGround = !S.useGround;   // 地平面模型（大寫 H）
+  else if (e.key === 'H') S.camH = S.camH ? 0 : 2.5;   // 地平面模型（大寫 H）
   else return;
   draw(); if (!S.running) reloadSoon();
 });

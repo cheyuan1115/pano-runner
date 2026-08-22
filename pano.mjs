@@ -60,31 +60,6 @@ export async function findPano(lat, lng, radius = 50) {
   return { pano: id, geom: readGeom(box[2]) };
 }
 
-// 從深度圖取出「相機離地多高」。photometa 回應裡最長的那個 base64 字串就是
-// 深度圖（url-safe，不是 zlib，直接是二進位）。認法：解碼後第一個 byte 是 8，
-// 而且 8 + 寬×高 + 平面數×16 剛好等於總長度。
-//
-// 座標系是 z 軸朝上。影像最底一列（正下方）一定落在地面那個平面，
-// 而地面平面的 d 就是相機高度。
-// 2026-08-22 實測：河口湖 1.60 m、巴黎 2.40 m、台北 2.50 m —— 每顆都不同，
-// 寫死一個值是不對的。
-function readCamHeight(raw) {
-  const cands = [...raw.matchAll(/"([A-Za-z0-9_-]{2000,})"/g)]
-    .map(m => m[1]).sort((a, b) => b.length - a.length);
-  for (const c of cands) {
-    let b;
-    try { b = Buffer.from(c.replace(/-/g, '+').replace(/_/g, '/'), 'base64'); } catch { continue; }
-    if (b.length < 9 || b[0] !== 8) continue;
-    const n = b.readUInt16LE(1), w = b.readUInt16LE(3), h = b.readUInt16LE(5), off = b.readUInt16LE(7);
-    if (8 + w * h + n * 16 !== b.length) continue;
-    const gi = b[off + (h - 1) * w];                    // 最底一列的平面索引
-    if (!gi) continue;
-    const d = Math.abs(b.readFloatLE(off + w * h + gi * 16 + 12));
-    if (d > 0.5 && d < 5) return d;                     // 合理範圍才採用
-  }
-  return 0;
-}
-
 const PB = pano => '!1m4!1smaps_sv.tactile!11m2!2m1!1b1!2m2!1szh-TW!2stw!3m3!1m2!1e2!2s' + pano
   + '!4m57!1e1!1e2!1e3!1e4!1e5!1e6!1e8!1e12!2m1!1e1!4m1!1i48!5m1!1e1!5m1!1e2!6m1!1e1!6m1!1e2'
   + '!9m36!1m3!1e2!2b1!3e2!1m3!1e2!2b0!3e3!1m3!1e3!2b1!3e2!1m3!1e3!2b0!3e3!1m3!1e8!2b0!3e3'
@@ -114,8 +89,6 @@ export async function panoMeta(pano) {
   return {
     pano,
     ...me,
-    camH: readCamHeight(raw) || 2.5,   // 拿不到就用街景車的常見值
-
     yaw: mine ? mine.yaw : 0,
     // P[7] 有值＝這顆屬於某個樓層集合，也就是室內或地下。這是 Google 自己的判斷。
     indoor: !!P[7],
