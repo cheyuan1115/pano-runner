@@ -18,13 +18,19 @@ import { findPano, panoMeta } from './pano.mjs';
 // 讀不到就當成沒有景點，不影響跑步。
 const LM_PATH = join(fileURLToPath(new URL('.', import.meta.url)),
                      '..', 'run-world', 'data', 'landmarks-extra.json');
-let LANDMARKS = [];
+let LANDMARKS = [], AUDIDX = {}, PHOTOS = {};
 try {
   LANDMARKS = JSON.parse(await readFile(LM_PATH, 'utf8'))
     .filter(l => l.lat != null && l.lng != null)
     .map(l => ({ id: l.id, name: l.name, lat: l.lat, lng: l.lng,
                  city: l.city, cat: l.category, len: (l.script || '').length }));
-  console.log(`景點 ${LANDMARKS.length} 個（${LM_PATH.replace(process.env.HOME, '~')}）`);
+  const dir = join(LM_PATH, '..');
+  // audio-index：每段導覽的逐句時間軸（marks）與句子（lines），689 筆
+  // landmark-photos：維基共享資源的照片，1373 個景點、平均 3.6 張
+  AUDIDX = JSON.parse(await readFile(join(dir, 'audio-index.json'), 'utf8'));
+  PHOTOS = JSON.parse(await readFile(join(dir, 'landmark-photos.json'), 'utf8'));
+  console.log(`景點 ${LANDMARKS.length} 個、字幕 ${Object.keys(AUDIDX).length} 筆、`
+    + `照片 ${Object.keys(PHOTOS).length} 組`);
 } catch { console.log('沒有景點資料，地圖上不會顯示'); }
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
@@ -78,7 +84,15 @@ createServer(async (req, res) => {
       };
       const hit = LANDMARKS.map(l => ({ ...l, d: d2(l) })).filter(l => l.d <= rad)
         .sort((a, b) => a.d - b.d).slice(0, 12)
-        .map(l => ({ ...l, audio: `/audio/${encodeURIComponent(l.city)}/${encodeURIComponent(l.id)}.mp3` }));
+        .map(l => {
+          const a = AUDIDX[l.id] || {};
+          return {
+            ...l,
+            audio: `/audio/${encodeURIComponent(l.city)}/${encodeURIComponent(l.id)}.mp3`,
+            lines: a.lines || [], marks: a.marks || [],
+            photos: (PHOTOS[l.id] || []).slice(0, 6).map(p => p.url).filter(Boolean),
+          };
+        });
       return json(res, { items: hit });
     }
     // 導覽音檔。優先給本機那份（快、離線也能用），沒有才轉到 CDN。

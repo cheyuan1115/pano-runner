@@ -29,6 +29,31 @@
 <canvas id="gl"></canvas>
 <div id="hud" class="fold">載入中…</div>
 <div id="attr">影像 © Google 街景服務</div>
+
+<!-- 景點導覽：照片在右上（雙層交叉淡入），字幕在底部 -->
+<div id="lm-photo"><div></div><div></div></div>
+<div id="lm-bar">
+  <div id="lm-name"></div>
+  <div id="lm-text"></div>
+</div>
+<style>
+  #lm-photo { position: fixed; right: 14px; top: 14px; width: 30vw; max-width: 460px;
+              aspect-ratio: 4/3; border-radius: 12px; overflow: hidden; z-index: 7;
+              opacity: 0; transition: opacity .5s; box-shadow: 0 8px 32px rgba(0,0,0,.55);
+              pointer-events: none; }
+  #lm-photo.on { opacity: 1; }
+  #lm-photo > div { position: absolute; inset: 0; background-size: cover;
+                    background-position: center; opacity: 0; transition: opacity .7s; }
+  #lm-photo > div.on { opacity: 1; }
+  #lm-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 40px;
+            max-width: min(1000px, 78vw); z-index: 7; text-align: center;
+            opacity: 0; transition: opacity .4s; pointer-events: none; }
+  #lm-bar.on { opacity: 1; }
+  #lm-name { font-size: 15px; color: #f0c07a; letter-spacing: 1px; margin-bottom: 6px;
+             text-shadow: 0 2px 8px rgba(0,0,0,.9); }
+  #lm-text { font-size: 21px; line-height: 1.55; color: #fff;
+             text-shadow: 0 2px 10px rgba(0,0,0,.95), 0 0 26px rgba(0,0,0,.7); }
+</style>
 <div id="keys" class="fold"><span class="body">空白鍵　開始 / 停止
 ← →　　下個路口左轉 / 右轉
 ↓　　　回頭

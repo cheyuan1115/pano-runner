@@ -928,6 +928,8 @@ function chime() {
   } catch {}
 }
 
+const $ = id => document.getElementById(id);
+
 function speak(lm) {
   S.spoken.add(lm.id);
   S.lastSpokeAt = S.moved;
@@ -935,19 +937,75 @@ function speak(lm) {
   // 播報中麥克風收到的是自己的喇叭聲 —— 步頻與語音指令都要跳過
   window.__speaking = true;
   chime();
+
+  // 每段給一個序號。舊的 onended 與圖片 onload 會晚一步觸發，不隔離的話
+  // 會把「下一段」的字幕和照片關掉 —— 症狀是停在一張照片上、沒有字幕。
+  const token = (S.sayToken = (S.sayToken || 0) + 1);
+  const mine = () => token === S.sayToken;
+
+  const bar = $('lm-bar'), pv = $('lm-photo');
+  const layers = [pv.children[0], pv.children[1]];
+  let cur = 0, pi = 0, photoTimer = null, textTimer = null;
+  $('lm-name').textContent = lm.name;
+  $('lm-text').textContent = (lm.lines && lm.lines[0]) || '';
+  bar.classList.add('on');
+
+  // 先預載再顯示 —— 直接換 background-image 會先黑一下才跳出圖
+  const showPhoto = k => {
+    const ph = lm.photos || [];
+    if (!ph.length) return;
+    const url = ph[k % ph.length];
+    const img = new Image();
+    img.onload = () => {
+      if (!mine()) return;                     // 已經換下一段了，這張是舊的
+      const next = layers[cur ^ 1];
+      next.style.backgroundImage = `url("${url}")`;
+      next.classList.remove('on'); void next.offsetWidth; next.classList.add('on');
+      layers[cur].classList.remove('on');
+      cur ^= 1;
+      pv.classList.add('on');
+    };
+    img.src = url;
+  };
+
   setTimeout(() => {
+    if (!mine()) return;
     try { if (audioEl) { audioEl.pause(); } } catch {}
     audioEl = preAudio.get(lm.id) || new Audio(lm.audio);
     audioEl.currentTime = 0;
     audioEl.volume = 0.9;
+
     const done = () => {
+      clearInterval(textTimer); clearInterval(photoTimer);
+      if (!mine()) return;                     // 舊的收尾不能動到現在這段
       S.speaking = false; S.nowSpeaking = '';
+      bar.classList.remove('on'); pv.classList.remove('on');
+      // 喇叭的尾音還在空氣中，晚一點再開始收指令
       setTimeout(() => { window.__speaking = false; }, 800);
       draw();
     };
+
+    // 字幕跟著時間軸逐句換
+    const marks = lm.marks || [], lines = lm.lines || [];
+    if (marks.length && lines.length) {
+      let i = 0;
+      textTimer = setInterval(() => {
+        if (!mine()) return clearInterval(textTimer);
+        while (i + 1 < marks.length && marks[i + 1] <= audioEl.currentTime) i++;
+        $('lm-text').textContent = lines[i] || '';
+      }, 120);
+    }
     audioEl.onended = done;
     audioEl.onerror = () => { S.note = `⚠ ${lm.name} 的音檔放不出來`; done(); };
-    audioEl.play().catch(() => done());
+    audioEl.onloadedmetadata = () => {
+      if (!mine()) return;
+      showPhoto(pi++);
+      // 照片平均分配在整段導覽裡，但每張至少停 4 秒
+      const per = Math.max(4000, (audioEl.duration * 1000) / Math.max(1, (lm.photos || []).length));
+      photoTimer = setInterval(() => showPhoto(pi++), per);
+    };
+    if (audioEl.readyState >= 1) audioEl.onloadedmetadata();
+    audioEl.play().catch(done);
   }, 550);
   draw();
 }
@@ -1247,7 +1305,12 @@ addEventListener('keydown', e => {
   else if (e.key === 'e') { finishRun(); return; }
   else if (e.key === 'n') {                            // 導覽開關
     S.narrate = !S.narrate;
-    if (!S.narrate && audioEl) { try { audioEl.pause(); } catch {} S.speaking = false; window.__speaking = false; }
+    if (!S.narrate) {
+      S.sayToken = (S.sayToken || 0) + 1;      // 讓進行中那段的收尾失效
+      try { if (audioEl) audioEl.pause(); } catch {}
+      S.speaking = false; window.__speaking = false;
+      $('lm-bar').classList.remove('on'); $('lm-photo').classList.remove('on');
+    }
     S.note = S.narrate ? '🔊 景點導覽開' : '🔇 景點導覽關';
   }
   else if (e.key === '0') S.proj = S.proj === 'pan' ? 'flat' : 'pan';
