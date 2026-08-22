@@ -220,7 +220,9 @@ const S = {
   // 相機離地高度。0 = 關閉地平面模型。
   // 開啟時用該顆全景自己的高度（從深度圖讀），不是寫死的值。
   camH: 0,
-  useGround: true,                      // 地平面模型開關（H 鍵）
+  // 地平面模型預設關閉 —— 使用者實測「不好」。
+  // 相機高度已經是每顆全景各自的正確值，要試的話按 H 打開。
+  useGround: false,
   running: false, kmh: 12, travelDir: 0,
   mic: false, micKmh: null, micAt: 0, micHeld: false, kmhCap: 12,
   voice: false,
