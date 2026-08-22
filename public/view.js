@@ -228,6 +228,13 @@ const S = {
   // 跑了 200 公尺還沒遇到就放棄（street-runner 驗過的做法）。
   wish: null, wishAt: 0, probedAt: 0,
   // 依序要跑到的目標點。到 60 公尺內就算到達，換下一個。
+  // 景點導覽
+  narrate: true,                        // 開關
+  spoken: new Set(),                    // 播過的不再播
+  lastSpokeAt: -9999,                   // 上次播報時跑了多遠
+  nearbyAt: -9999, nearby: [],          // 附近景點快取
+  speaking: false, nowSpeaking: '',
+  nextLm: null,                         // 前方最近、還沒播過的景點（給 HUD 顯示）
   targets: [], target: null, targetNo: 1,
   bestToTarget: Infinity, targetSetAt: 0, bestAt: 0,
   // 轉向世代序號。轉向指令下達時，那一步的動畫往往還在跑；動畫結束時
@@ -477,6 +484,8 @@ function drawInner() {
       + `${(S.moved / 1000).toFixed(2)} km`
       + (S.mic ? `　🎙${window.__cad?.spm ? Math.round(window.__cad.spm) : '…'}` : '')
       + (S.voice ? `　🗣${voiceState()}` : '')
+      + (S.speaking ? `　🔊 ${S.nowSpeaking}`
+         : S.nextLm ? `　🎧 ${S.nextLm.name} ${Math.round(S.nextLm.d)} m` : '')
       + (S.note ? `　${S.note}` : '');
     return;
   }
@@ -494,6 +503,8 @@ function drawInner() {
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
     + `推近 ${S.zoomPer.toFixed(2)}×${S.camH ? '+地面' : ''}   `
     + `${S.steps} 步 ${(S.moved / 1000).toFixed(2)} km`
+    + (S.speaking ? `　🔊 ${S.nowSpeaking}`
+       : S.nextLm ? `　🎧 ${S.nextLm.name} ${Math.round(S.nextLm.d)} m` : '')
     + (S.target ? `　⌖ 第 ${S.targetNo} 點 ${Math.round(distM(S.cur.meta, S.target))} m`
        + (S.targets.length ? `（還有 ${S.targets.length} 個）` : '') : '')
     + (S.track.length ? `　紀錄 ${S.track.length} 點（按 s 匯出 GPX）` : '') + '\n'
@@ -673,6 +684,7 @@ async function stepOnce() {
   S.steps++; S.moved += d;
   trackPoint(P.meta);
   checkTarget(P.meta);
+  maybeNarrate(P.meta);
   if (S.wish) {
     // 有效距離放到 600 公尺。城市街廓比想像的長 —— 曼哈頓的大道間距就有 270 公尺，
     // 原本設 200 公尺會在還沒跑到路口時就自己取消（實測就是這樣）。
@@ -873,6 +885,113 @@ function exportGPX() {
     'application/gpx+xml');
   S.note = `⇩ 已匯出 ${run.pts.length} 個點　${(run.moved/1000).toFixed(2)} km`;
   draw();
+}
+
+// ── 景點導覽 ──
+//
+// 觸發規則參考 VoiceMap 與 Autio 的做法，但因為我們的座標是虛擬的、沒有 GPS 跳動，
+// 可以做得更準：
+//   · 在前方（跟行進方向夾角 90° 內）且距離 150 公尺內才播 —— 背後的不播
+//   · 播了就播到完，不中斷（VoiceMap 也是這樣，硬切比講完更難受）
+//   · 兩次之間至少隔 400 公尺，東京那種每 300 公尺一個景點的地方才不會一直講
+//   · 開始前先一聲短提示音，不然突然有人講話會嚇一跳（Autio 的細節）
+let audioEl = null;
+// 預載過的音檔（id → HTMLAudioElement）。景點還在 300 公尺外就先抓，
+// 不然 460 KB 的下載會跟磚塊搶頻寬 —— 實測觸發當下有一步慢到二十秒被看門狗抓。
+const preAudio = new Map();
+function preloadAudio(lm) {
+  if (!lm || preAudio.has(lm.id)) return;
+  const a = new Audio();
+  a.preload = 'auto';
+  a.src = lm.audio;
+  preAudio.set(lm.id, a);
+  if (preAudio.size > 6) {
+    const k = preAudio.keys().next().value;
+    const old = preAudio.get(k);
+    if (old !== audioEl) { try { old.src = ''; } catch {} preAudio.delete(k); }
+  }
+}
+
+function chime() {
+  try {
+    const C = window.AudioContext || window.webkitAudioContext;
+    const ac = new C();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.connect(g); g.connect(ac.destination);
+    o.frequency.setValueAtTime(880, ac.currentTime);
+    o.frequency.exponentialRampToValueAtTime(1320, ac.currentTime + 0.12);
+    g.gain.setValueAtTime(0.0001, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.18, ac.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.45);
+    o.start(); o.stop(ac.currentTime + 0.5);
+    setTimeout(() => ac.close().catch(() => {}), 900);
+  } catch {}
+}
+
+function speak(lm) {
+  S.spoken.add(lm.id);
+  S.lastSpokeAt = S.moved;
+  S.speaking = true; S.nowSpeaking = lm.name;
+  // 播報中麥克風收到的是自己的喇叭聲 —— 步頻與語音指令都要跳過
+  window.__speaking = true;
+  chime();
+  setTimeout(() => {
+    try { if (audioEl) { audioEl.pause(); } } catch {}
+    audioEl = preAudio.get(lm.id) || new Audio(lm.audio);
+    audioEl.currentTime = 0;
+    audioEl.volume = 0.9;
+    const done = () => {
+      S.speaking = false; S.nowSpeaking = '';
+      setTimeout(() => { window.__speaking = false; }, 800);
+      draw();
+    };
+    audioEl.onended = done;
+    audioEl.onerror = () => { S.note = `⚠ ${lm.name} 的音檔放不出來`; done(); };
+    audioEl.play().catch(() => done());
+  }, 550);
+  draw();
+}
+
+// 每一步重算「前方最近景點」的距離。查詢是每 150 公尺一次，
+// 但顯示的距離要跟著你跑而變，不然數字會卡住不動。
+function refreshNext(meta) {
+  let next = null;
+  for (const lm of S.nearby || []) {
+    if (S.spoken.has(lm.id)) continue;
+    const d = distM(meta, lm);
+    if (Math.abs(ad(bearingTo(meta, lm), S.travelDir)) > 90) continue;
+    if (!next || d < next.d) next = { ...lm, d };
+  }
+  S.nextLm = next;
+  // 進入 300 公尺就先把音檔抓下來
+  if (next && next.d < 300) preloadAudio(next);
+  return next;
+}
+
+async function maybeNarrate(meta) {
+  if (!S.narrate) { S.nextLm = null; return; }
+  refreshNext(meta);
+  if (S.speaking) return;
+  if (S.moved - S.lastSpokeAt < 400) return;          // 最小間隔
+  // 每跑 150 公尺重新查一次附近景點
+  if (S.moved - S.nearbyAt > 150) {
+    S.nearbyAt = S.moved;
+    try {
+      const r = await fetch(`/api/nearby?ll=${meta.lat},${meta.lng}&r=400`,
+        { signal: AbortSignal.timeout(6000) });
+      S.nearby = (await r.json()).items || [];
+    } catch { S.nearby = []; }
+  }
+  // 順便找出「前方最近、還沒播過」的那一個，給 HUD 顯示距離
+  let next = null;
+  for (const lm of S.nearby) {
+    if (S.spoken.has(lm.id)) continue;
+    const d = distM(meta, lm);
+    if (Math.abs(ad(bearingTo(meta, lm), S.travelDir)) > 90) continue;   // 只算前方的
+    if (!next || d < next.d) next = { ...lm, d };
+  }
+  S.nextLm = next;
+  if (next && next.d <= 150) speak(next);
 }
 
 // 兩點之間的距離（公尺）
@@ -1126,6 +1245,11 @@ addEventListener('keydown', e => {
   }
   else if (e.key === 's') { exportGPX(); return; }
   else if (e.key === 'e') { finishRun(); return; }
+  else if (e.key === 'n') {                            // 導覽開關
+    S.narrate = !S.narrate;
+    if (!S.narrate && audioEl) { try { audioEl.pause(); } catch {} S.speaking = false; window.__speaking = false; }
+    S.note = S.narrate ? '🔊 景點導覽開' : '🔇 景點導覽關';
+  }
   else if (e.key === '0') S.proj = S.proj === 'pan' ? 'flat' : 'pan';
   else if (e.key === 'd') {
     const L = [-1, 0.3, 0.6, 1.0, 1.5, 2.0];      // −1 = 圓柱
@@ -1186,6 +1310,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
     S.hFovPer = (S.hFovPer * 3) / n; S.panels = n;
   }
   if (q.has('bottom')) S.bottomDeg = +q.get('bottom');
+  if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('targets')) {
     S.targets = q.get('targets').split('|').map(t => {
       const [la, ln] = t.split(',').map(Number);

@@ -65,6 +65,35 @@ createServer(async (req, res) => {
       hit.sort((a, c) => c.len - a.len);
       return json(res, { n: hit.length, items: hit.slice(0, 400) });
     }
+    // 附近的景點（跑步時用），依距離排序，附上導覽稿長度與音檔路徑
+    if (u.pathname === '/api/nearby') {
+      const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
+      const rad = Number(u.searchParams.get('r')) || 400;
+      if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
+      const R = 6371000, toRad = x => x * Math.PI / 180;
+      const d2 = l => {
+        const dp = toRad(l.lat - lat), dl = toRad(l.lng - lng);
+        const h = Math.sin(dp / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(l.lat)) * Math.sin(dl / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(h));
+      };
+      const hit = LANDMARKS.map(l => ({ ...l, d: d2(l) })).filter(l => l.d <= rad)
+        .sort((a, b) => a.d - b.d).slice(0, 12)
+        .map(l => ({ ...l, audio: `/audio/${encodeURIComponent(l.city)}/${encodeURIComponent(l.id)}.mp3` }));
+      return json(res, { items: hit });
+    }
+    // 導覽音檔。優先給本機那份（快、離線也能用），沒有才轉到 CDN。
+    if (u.pathname.startsWith('/audio/')) {
+      const rel = decodeURIComponent(u.pathname.slice('/audio/'.length));
+      const f = normalize(join(LM_PATH, '..', 'audio', rel));
+      try {
+        const body = await readFile(f);
+        res.writeHead(200, { 'content-type': 'audio/mpeg', 'cache-control': 'max-age=86400' });
+        return res.end(body);
+      } catch {
+        res.writeHead(302, { location: 'https://autogpsconfig.web.app/audio/' + rel.split('/').map(encodeURIComponent).join('/') });
+        return res.end();
+      }
+    }
     // 某個景點的導覽稿
     if (u.pathname === '/api/script') {
       const id = u.searchParams.get('id');

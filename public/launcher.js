@@ -422,7 +422,7 @@ el('runlist').onclick = e => {
 };
 
 // ── 記住上次的選擇 ──
-const KEEP = ['kmh', 'panels', 'zoom', 'mic', 'voice'];
+const KEEP = ['kmh', 'panels', 'zoom', 'mic', 'voice', 'narrate'];
 const saved = (() => { try { return JSON.parse(localStorage.getItem('pr-opts') || '{}'); } catch { return {}; } })();
 for (const k of KEEP) {
   const e = el(k); if (!e || saved[k] === undefined) continue;
@@ -464,6 +464,7 @@ el('start').onclick = () => {
     zoom: el('zoom').value,
     mic: el('mic').checked ? '1' : '0',
     voice: el('voice').checked ? '1' : '0',
+    narrate: el('narrate').checked ? '1' : '0',
     run: '1',
   });
   location.href = '/run.html?' + p;
