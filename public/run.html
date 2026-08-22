@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pano-runner 檢視器</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0e10; overflow: hidden;
+               font: 13px/1.5 -apple-system, "PingFang TC", sans-serif; color: #e8e8ea; }
+  #gl { display: block; width: 100vw; height: 100vh; cursor: grab; }
+  #gl.drag { cursor: grabbing; }
+  #hud { position: fixed; left: 12px; top: 12px; background: rgba(14,15,18,.82);
+         border: 1px solid #2a2d33; border-radius: 8px; padding: 9px 12px;
+         backdrop-filter: blur(8px); white-space: pre; letter-spacing: .2px;
+         cursor: pointer; user-select: none; }
+  #hud.fold { padding: 5px 10px; opacity: .6; font-size: 12px; }
+  #hud.fold:hover { opacity: 1; }
+  #hud b { color: #6fd08c; font-weight: 600; }
+  /* Geo Guidelines 要求所有使用都要標示出處，而且不能被遮住或移除 */
+  #attr { position: fixed; left: 12px; bottom: 10px; z-index: 6;
+          font-size: 11px; color: #cfd3d9; letter-spacing: .2px;
+          text-shadow: 0 1px 3px rgba(0,0,0,.9); pointer-events: none; }
+  #keys { position: fixed; right: 12px; bottom: 12px; color: #8a8f98;
+          background: rgba(14,15,18,.82); border: 1px solid #2a2d33;
+          border-radius: 8px; padding: 8px 11px; white-space: pre;
+          cursor: pointer; user-select: none; }
+  #keys.fold { padding: 4px 9px; opacity: .5; }
+  #keys.fold > .body { display: none; }
+  #keys.fold::before { content: '?'; font-size: 13px; }
+  #keys:not(.fold)::before { content: ''; }
+</style>
+<canvas id="gl"></canvas>
+<div id="hud" class="fold">載入中…</div>
+<div id="attr">影像 © Google 街景服務</div>
+<div id="keys" class="fold"><span class="body">空白鍵　開始 / 停止
+← →　　下個路口左轉 / 右轉
+↓　　　回頭
+說「左轉」「右轉」「回頭」也可以
++ -　　速度
+0　　　連續（圓柱）/ 分片
+d　　　圓柱 / Panini 切換
+f　　　畫面下緣角度（霧區大小）
+b　　　自動比例開關
+t　　　開側翼視窗（按兩次＝左右）
+9　　　視角仰角
+g　　　分片之間的間隔線
+, .　　超廣角寬度
+1–9　　片數（總視野不變）
+[ ]　　視角寬窄
+z　　　解析度 3 / 4 / 5
+r　　　推近倍率 1.2 / 1.35 / 1.5 / 1.7
+i　　　收合狀態欄
+,　　　調整面板
+s　　　匯出這趟路線（GPX）
+e　　　結束跑步並存檔
+說「結束跑步」也可以
+h　　　總視野
+Shift+H　地平面模型
+拖曳　　左右看
+（點一下收合）</span></div>
+<div id="tune">
+  <div class="hd">調整　<span id="tclose">✕</span></div>
+  <label>場景深度<b id="v-zoom"></b><input id="t-zoom" type="range" min="1.1" max="2.6" step="0.05"></label>
+  <label>溶解時間<b id="v-diss"></b><input id="t-diss" type="range" min="60" max="700" step="20"></label>
+  <label>總視野<b id="v-hfov"></b><input id="t-hfov" type="range" min="70" max="330" step="5"></label>
+  <label>下緣角度<b id="v-bot"></b><input id="t-bot" type="range" min="14" max="40" step="1"></label>
+  <label>速度<b id="v-kmh"></b><input id="t-kmh" type="range" min="4" max="22" step="1"></label>
+  <label>片數<b id="v-pan"></b><input id="t-pan" type="range" min="1" max="9" step="1"></label>
+</div>
+<style>
+  #tune { position: fixed; left: 12px; bottom: 34px; z-index: 8; width: 230px; display: none;
+          background: rgba(14,15,18,.92); border: 1px solid #2a2d33; border-radius: 10px;
+          padding: 10px 12px; backdrop-filter: blur(8px); }
+  #tune.on { display: block; }
+  #tune .hd { font-size: 12px; color: #8a8f98; margin-bottom: 6px; display: flex; justify-content: space-between; }
+  #tune .hd span { cursor: pointer; }
+  #tune label { display: block; font-size: 12px; color: #c9ccd2; margin-top: 7px; }
+  #tune b { float: right; color: #6fd08c; font-weight: 600; }
+  #tune input { width: 100%; margin-top: 2px; accent-color: #2f7d4f; }
+</style>
+<script src="view.js"></script>

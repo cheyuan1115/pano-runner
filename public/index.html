@@ -1,0 +1,109 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pano-runner 啟動器</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0d0e10; color: #e8e8ea;
+               font: 14px/1.6 -apple-system, "PingFang TC", sans-serif; overflow: hidden; }
+  #map { position: absolute; inset: 0; cursor: crosshair; overflow: hidden; }
+  #map.pan { cursor: grabbing; }
+  .tile { position: absolute; width: 256px; height: 256px; }
+  #ink { position: absolute; inset: 0; pointer-events: none; }
+  #side { position: absolute; right: 14px; top: 14px; width: 290px; z-index: 5;
+          background: rgba(16,17,21,.92); border: 1px solid #2c2f36; border-radius: 12px;
+          padding: 14px 15px; backdrop-filter: blur(10px); }
+  h1 { font-size: 15px; margin: 0 0 10px; letter-spacing: .3px; }
+  label { display: block; font-size: 12px; color: #8b909a; margin: 11px 0 4px; }
+  input, select { width: 100%; box-sizing: border-box; background: #1a1c21; color: #e8e8ea;
+                  border: 1px solid #33373f; border-radius: 7px; padding: 7px 9px; font: inherit; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button { width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 8px;
+           background: #2f7d4f; color: #fff; font: 600 14px/1 inherit; cursor: pointer; }
+  button:disabled { background: #24262b; color: #6a6f78; cursor: default; }
+  button.ghost { background: #24262b; color: #c9ccd2; margin-top: 8px; padding: 7px; font-weight: 400; }
+  #step { font-size: 12px; color: #6fd08c; min-height: 34px; margin-top: 8px; }
+  #mattr { position: absolute; right: 14px; bottom: 12px; z-index: 4; font-size: 11px;
+           color: #6a6f78; background: rgba(16,17,21,.7); padding: 3px 8px; border-radius: 6px; }
+  #hint { position: absolute; left: 14px; bottom: 14px; font-size: 12px; color: #8b909a;
+          background: rgba(16,17,21,.88); border: 1px solid #2c2f36; border-radius: 9px;
+          padding: 8px 11px; white-space: pre; }
+  .quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .quick span { font-size: 12px; padding: 4px 8px; background: #1a1c21; border: 1px solid #33373f;
+                border-radius: 999px; cursor: pointer; }
+  .quick span:hover { border-color: #2f7d4f; }
+</style>
+
+<div id="map"></div>
+<canvas id="ink"></canvas>
+
+<div id="side">
+  <h1>pano-runner 啟動器</h1>
+
+  <label>找地方</label>
+  <div class="row">
+    <input id="q" placeholder="巴黎、台北市、河口湖…">
+    <button class="ghost" id="go" style="flex:0 0 56px;margin:0">搜尋</button>
+  </div>
+  <div class="quick" id="quick"></div>
+
+  <label>速度　<b id="kmhv">12</b> km/h</label>
+  <input id="kmh" type="range" min="4" max="20" step="1" value="12">
+  <label style="display:flex;align-items:center;gap:7px;margin-top:9px;color:#c9ccd2">
+    <input id="mic" type="checkbox" style="width:auto;margin:0">
+    用麥克風聽跑步聲決定速度
+  </label>
+  <div id="micnote" style="font-size:11px;color:#6a6f78;display:none">
+    上面的滑桿變成沒聽到腳步聲時的上限。跑步機的腳步聲要收得到。</div>
+  <label style="display:flex;align-items:center;gap:7px;margin-top:7px;color:#c9ccd2">
+    <input id="voice" type="checkbox" checked style="width:auto;margin:0">
+    語音操控（左轉／右轉／回頭／結束跑步）
+  </label>
+
+  <div class="row">
+    <div>
+      <label>畫面</label>
+      <select id="panels">
+        <option value="5" selected>五片（接縫折角最小）</option>
+        <option value="3">三片</option>
+        <option value="1">單片</option>
+        <option value="pan">連續超廣角（圓柱，零折角）</option>
+      </select>
+    </div>
+    <div>
+      <label>解析度</label>
+      <select id="zoom">
+        <option value="3">3（省流量）</option>
+        <option value="4" selected>4（一般）</option>
+        <option value="5">5（最清晰）</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="runs" style="display:none">
+    <label>跑過的路線</label>
+    <div id="runlist" style="max-height:150px;overflow:auto;font-size:12px"></div>
+  </div>
+
+  <div id="step">先在地圖上點一下「起跑點」。</div>
+  <button id="start" disabled>開始跑</button>
+  <button class="ghost" id="reset">重設</button>
+</div>
+
+<div id="zoombtn">
+  <span id="zin">＋</span><span id="zout">－</span><b id="zlvl"></b>
+</div>
+<div id="mattr">© OpenStreetMap 貢獻者 · © CARTO</div>
+<div id="hint">拖曳或兩指滑動＝移動　捏合或 ＋－ ＝縮放
+第一下點起跑點，第二下點朝向</div>
+<style>
+  #zoombtn { position: absolute; left: 14px; top: 14px; z-index: 5; display: flex;
+             align-items: center; gap: 2px; background: rgba(16,17,21,.9);
+             border: 1px solid #2c2f36; border-radius: 9px; overflow: hidden; }
+  #zoombtn span { width: 34px; height: 32px; display: grid; place-items: center;
+                  cursor: pointer; color: #e8e8ea; font-size: 15px; user-select: none; }
+  #zoombtn span:hover { background: #23262c; }
+  #zoombtn b { font-size: 11px; color: #8a8f98; padding: 0 9px 0 5px; font-weight: 400; }
+</style>
+
+<script src="launcher.js"></script>
