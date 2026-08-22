@@ -244,6 +244,10 @@ const S = {
   // 每片的水平視野。要「幾何正確」（畫面裡的角度＝眼睛看到的角度），
   // 這個值應該等於螢幕在你眼中的實際張角：2·atan(螢幕可視寬/2 ÷ 觀看距離)。
   // 設得比實際張角大＝廣角效果，看起來比較有速度感但比例被壓縮。
+  // 總視野才是來源，每片視野一律推導：hFovPer = clamp(totalFov / panels, 20, 110)。
+  // 先前把 hFovPer 當來源、換片數時去乘除，一旦被夾住（例如單片時 210 → 110）
+  // 總視野就永久掉下來回不去了。
+  totalFov: 210,
   hFovPer: 70,
   // 實體三螢幕用：邊框補償（像素）。三片各在一台螢幕上時，兩台之間的邊框
   // 會遮掉一段畫面；把 bezel 設成「邊框寬度換算成的像素數」，那一段就不畫，
@@ -538,7 +542,8 @@ function drawInner() {
   }
   if (S.fit && S.proj !== 'pan') {
     S.fov = 2 * (S.bottomDeg + S.pitch);
-    const need = Math.round(pw * Math.tan(rad(S.fov / 2)) / Math.tan(rad(S.hFovPer / 2)));
+    const hf = Math.max(20, Math.min(110, S.hFovPer));
+    const need = Math.round(pw * Math.tan(rad(S.fov / 2)) / Math.tan(rad(hf / 2)));
     if (need <= h) { vh = need; y0 = Math.round((h - vh) / 2); }
     else { S.fov = 2 * Math.atan(Math.tan(rad(S.hFovPer / 2)) * h / pw) * 180 / Math.PI; }
   }
@@ -1075,10 +1080,14 @@ function voiceBanner() {
 // 切得越細，接縫的折角越小（實測 210° 總視野：3 片折 16.9°、5 片 6.2°、7 片 3.2°），
 // 而且每片越窄、直線透視的拉伸越少，中央解析度反而更好（12.2 → 13.4 px/度）。
 // 極限就是圓柱投影。單一平面螢幕上，片數多是純粹的好處。
+// 每片一定要夾在 110° 以內。直線透視超過 180° 在數學上不存在，tan(半角) 會變負的
+// —— 實測單片時把 210° 全塞給一片，繪製高度算出負值，畫面縮成角落一小條。
+// 110° 以上邊緣也已經拉到不能看。
+const applyFov = () => { S.hFovPer = Math.max(20, Math.min(110, S.totalFov / S.panels)); };
+
 function setPanels(n) {
-  const total = S.hFovPer * S.panels;
   S.panels = Math.max(1, Math.min(9, n));
-  S.hFovPer = total / S.panels;
+  applyFov();
   S.proj = 'flat';
 }
 
@@ -1091,7 +1100,8 @@ const TUNE = [
   ['diss', 'dissolveMs', v => `${v} ms`],
   // 這一格調的是「總視野」而不是每片 —— 每片的值會隨片數變，
   // 拿它當旋鈕的話換片數後意義就跑掉了，使用者無從理解。
-  ['hfov', 'totalFov',  v => `${v}°　每片 ${(v / S.panels).toFixed(0)}°`],
+  // 實際畫出來的可能比設定值小（每片被夾在 110° 以內），所以兩個都顯示
+  ['hfov', 'totalFov',  v => `${v}°　實得 ${Math.round(S.hFovPer * S.panels)}°`],
   ['bot',  'bottomDeg', v => `−${v}°`],
   ['kmh',  'kmh',       v => `${v} km/h`],
   ['pan',  'panels',    v => `${v} 片　每片 ${(S.hFovPer).toFixed(0)}°`],
@@ -1101,7 +1111,7 @@ if (tune) {
   const sync = () => {
     for (const [id, key, fmt] of TUNE) {
       const el = document.getElementById('t-' + id);
-      const val = key === 'totalFov' ? Math.round(S.hFovPer * S.panels) : S[key];
+      const val = key === 'totalFov' ? S.totalFov : S[key];
       if (document.activeElement !== el) el.value = val;
       document.getElementById('v-' + id).textContent = fmt(val);
     }
@@ -1109,7 +1119,7 @@ if (tune) {
   for (const [id, key] of TUNE) {
     document.getElementById('t-' + id).addEventListener('input', e => {
       if (key === 'panels') setPanels(+e.target.value);        // 要連帶改每片視野
-      else if (key === 'totalFov') S.hFovPer = +e.target.value / S.panels;
+      else if (key === 'totalFov') { S.totalFov = +e.target.value; applyFov(); }
       else S[key] = +e.target.value;
       if (key === 'kmh') S.kmhCap = S.kmh;
       sync(); draw();
@@ -1173,9 +1183,9 @@ addEventListener('keydown', e => {
   else if (e.key === 'b') S.fit = !S.fit;
   else if (e.key === 'h') {                       // 總視野循環
     const T = [120, 150, 180, 210, 240, 280];
-    const cur = Math.round(S.hFovPer * S.panels);
-    const i = T.findIndex(x => x > cur + 1);
-    S.hFovPer = T[i < 0 ? 0 : i] / S.panels;
+    const i = T.findIndex(x => x > S.totalFov + 1);
+    S.totalFov = T[i < 0 ? 0 : i];
+    applyFov();
   }
   else if (e.key === 't') { openWing(); return; }
   else if (e.key === 'g') S.gap = !S.gap;
@@ -1222,15 +1232,17 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (S.panelIdx !== null) S.panels = 3;
   if (q.has('panels') && S.panelIdx === null) {
     // 網址給的片數要保持總視野 —— 預設 3 片 × 70° = 210°
-    const n = Math.max(1, Math.min(9, +q.get('panels')));
-    S.hFovPer = (S.hFovPer * 3) / n; S.panels = n;
+    S.panels = Math.max(1, Math.min(9, +q.get('panels')));
+    applyFov();
   }
   if (q.has('bottom')) S.bottomDeg = +q.get('bottom');
+  if (q.has('total')) { S.totalFov = +q.get('total'); applyFov(); }
   if (q.has('hfov')) S.hFovPer = +q.get('hfov');
   // 直接給螢幕尺寸與距離，程式自己算出幾何正確的水平視野。
   // sw = 單片可視寬度(mm)（單螢幕就是整片寬），dist = 眼睛到螢幕(mm)
   if (q.has('sw') && q.has('dist')) {
     S.hFovPer = 2 * Math.atan(+q.get('sw') / 2 / +q.get('dist')) * 180 / Math.PI;
+    S.totalFov = S.hFovPer * S.panels;
   }
   if (q.get('gap') === '1') S.gap = true;
   if (q.has('bezel')) S.bezel = +q.get('bezel');
@@ -1277,5 +1289,5 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   addEventListener('pagehide', saveTrack);
   addEventListener('visibilitychange', () => { if (document.hidden) saveTrack(); });
   // 語音狀態會變，讓收合的 HUD 也跟著更新
-  setInterval(() => { if (!S.running) draw(); }, 1000);
+  setInterval(() => { if (!S.running && !window.__noAuto) draw(); }, 1000);
 })();
