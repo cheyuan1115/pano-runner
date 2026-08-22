@@ -60,6 +60,60 @@ export async function findPano(lat, lng, radius = 50) {
   return { pano: id, geom: readGeom(box[2]) };
 }
 
+// 深度圖藏在回應裡最長的那個 base64 字串（url-safe，要補 padding）。
+// 不是 zlib，直接就是二進位。認法：解碼後第一個 byte 是 8，
+// 而且 8 + 寬×高 + 平面數×16 剛好等於總長度。
+//
+// 結構：標頭 8 bytes（[0] 標頭大小、[1:3] 平面數、[3:5] 寬、[5:7] 高、[7:9] 偏移）
+//       接著每像素一個平面索引（0 = 天空），再接著每平面 4 個 float32
+//       （法向 nx,ny,nz 與距離 d）。固定 512×256。
+//
+// 座標系是 **z 軸朝上**：地面平面的法向是 (0,0,±1)，d 就是相機離地高度。
+// 深度 t = |d / (v·n)|。水平線落在 y/H = 0.504，跟影像同一套 yaw。
+// 2026-08-22 實測：地面深度與 h/sin|仰角| 完全吻合（−10° 時 14.4 vs 14.4）。
+//
+// 注意它是**合成**的，只有地面與建築輪廓 —— 車、樹、高架橋都不在裡面
+// （實測台北路口：天空 45%、地面 49%、立面只有 5%）。
+export function parseDepth(raw) {
+  const cands = [...raw.matchAll(/"([A-Za-z0-9_-]{2000,})"/g)]
+    .map(m => m[1]).sort((a, b) => b.length - a.length);
+  for (const c of cands) {
+    let b;
+    try { b = Buffer.from(c.replace(/-/g, '+').replace(/_/g, '/'), 'base64'); } catch { continue; }
+    if (b.length < 9 || b[0] !== 8) continue;
+    const n = b.readUInt16LE(1), w = b.readUInt16LE(3), h = b.readUInt16LE(5), off = b.readUInt16LE(7);
+    if (8 + w * h + n * 16 !== b.length) continue;
+    const idx = b.subarray(off, off + w * h);
+    const pl = i => [0, 1, 2, 3].map(k => b.readFloatLE(off + w * h + i * 16 + k * 4));
+    // 相機離地高度：取影像最底一列（正下方一定是地面）那個平面的 d
+    const gi = idx[(h - 1) * w];
+    const camH = gi ? Math.abs(pl(gi)[3]) : 0;
+
+    // 場景的代表深度：水平線附近（−12°～+18°）非天空像素的中位深度。
+    // 這就是使用者一直在手動調的「場景深度」—— 街道實際多寬，資料裡就有答案。
+    const ds = [];
+    for (let y = Math.round((0.5 - 18 / 180) * h); y < Math.round((0.5 + 12 / 180) * h); y++) {
+      const el = (0.5 - (y + 0.5) / h) * Math.PI;
+      for (let x = 0; x < w; x += 4) {
+        const pi = idx[y * w + x];
+        if (!pi) continue;
+        const [nx, ny, nz, d] = pl(pi);
+        const az = (x / w) * 2 * Math.PI;
+        const dot = Math.cos(el) * Math.sin(az) * nx + Math.cos(el) * Math.cos(az) * ny + Math.sin(el) * nz;
+        if (Math.abs(dot) < 1e-6) continue;
+        const t = Math.abs(d / dot);
+        if (t > 2 && t < 400) ds.push(t);
+      }
+    }
+    ds.sort((a, b2) => a - b2);
+    const sceneR = ds.length ? ds[ds.length >> 1] : 0;
+
+    // 原始 base64 原樣傳給瀏覽器（約 178 KB）—— 展開成 JSON 陣列會變成 400 KB 以上
+    return { w, h, n, camH, sceneR, b64: c };
+  }
+  return null;
+}
+
 const PB = pano => '!1m4!1smaps_sv.tactile!11m2!2m1!1b1!2m2!1szh-TW!2stw!3m3!1m2!1e2!2s' + pano
   + '!4m57!1e1!1e2!1e3!1e4!1e5!1e6!1e8!1e12!2m1!1e1!4m1!1i48!5m1!1e1!5m1!1e2!6m1!1e1!6m1!1e2'
   + '!9m36!1m3!1e2!2b1!3e2!1m3!1e2!2b0!3e3!1m3!1e3!2b1!3e2!1m3!1e3!2b0!3e3!1m3!1e8!2b0!3e3'
@@ -86,9 +140,17 @@ export async function panoMeta(pano) {
   // 自己的偏轉角就藏在鄰居清單第一筆（那一筆的 pano id 等於自己）
   const mine = nb.find(n => n.id === pano);
 
+  const depth = parseDepth(raw);
+
   return {
     pano,
     ...me,
+    // 相機離地高度。每顆不一樣（實測河口湖 1.60 m、台北 2.50 m），
+    // 寫死一個值是不對的。拿不到就用 2.5（街景車的常見值）。
+    camH: depth && depth.camH > 0.5 && depth.camH < 5 ? depth.camH : 2.5,
+    // 這條街實際多寬。拿不到就給 0，畫面端會退回使用者設定的值。
+    sceneR: depth && depth.sceneR > 4 ? depth.sceneR : 0,
+    depth,
     yaw: mine ? mine.yaw : 0,
     // P[7] 有值＝這顆屬於某個樓層集合，也就是室內或地下。這是 Google 自己的判斷。
     indoor: !!P[7],

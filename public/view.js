@@ -34,6 +34,12 @@ uniform float uOff;           // 這一片在相機座標系裡的水平偏移�
 uniform vec3 uTravel;         // 行進方向（已轉到這顆全景的影像經度座標系）
 uniform float uT, uR;         // 相機沿行進方向平移多少公尺、場景近似半徑
 uniform float uPanoPos;       // 這顆全景在共用世界座標裡的位置（沿行進方向，公尺）
+uniform sampler2D uPIdx;      // 512×256，每像素的平面索引
+uniform sampler2D uPNrm;      // 256×1，每個平面的法向
+uniform sampler2D uPDst;      // 256×1，每個平面的距離（16 bit）
+uniform float uHasDepth;      // 這顆全景有沒有深度圖
+uniform float uPanoYaw;       // 這顆全景的偏轉角（弧度），深度圖要用它對齊
+uniform float uDbgDepth;      // 除錯：把「有沒有用到深度圖」畫成顏色
 uniform float uCyl;           // 0 = 多片直線透視／1 = Panini 連續投影
 uniform float uKx, uKy, uD;   // Panini：水平尺度、垂直尺度、鏡頭距離參數
 uniform float uFadeA, uFadeB; // 底部淡出：從這個緯度開始，到這個緯度全暗（弧度）
@@ -41,7 +47,10 @@ uniform float uCamH;          // 相機離地高度（公尺）。0 = 不用地�
 uniform vec2 uBaseScale, uDetScale;
 uniform float uDetS0, uDetSpanS, uDetT0, uDetSpanT, uHasDet;
 const float PI = 3.14159265358979;
+bool gotDepth;
+float dbgS2;
 void main() {
+  gotDepth = false; dbgS2 = -1.0;
   vec3 d;
   if (uCyl > 0.5) {
     // 連續投影，沒有接縫可以折。uD < 0 是圓柱，否則是 Panini。
@@ -99,12 +108,45 @@ void main() {
     // 先前是各自以自己為球心、各自用自己的相機位移，等於在描述兩個不同的世界 ——
     // 實測轉場中點時同一條射線的方位角差到 12.9°，溶解時兩張圖對不齊。
     vec3 cam = uT * uTravel;
-    float depthPlane = (uCamH > 0.0 && w.y < -0.001) ? uCamH / (-w.y) : 1e9;
-    vec3 pt;
-    if (depthPlane < uR) {
-      pt = cam + depthPlane * w;                 // 地面：與 y = −相機高度 的交點
-    } else {
-      // 以原點（現在這顆全景）為球心、半徑 uR 的球面
+    vec3 pt = vec3(0.0);
+    gotDepth = false;
+
+    if (uHasDepth > 0.5) {
+      // 逐像素深度。Google 的深度圖是分段平面的（地面一面、每棟建築立面一面），
+      // 所以只要查出這條射線落在哪個平面，就能用射線與平面的交點解析求解 ——
+      // 不需要 ray marching。近似只在於「用大略方向去查平面」。
+      //
+      // 深度圖的座標是 z 軸朝上、方位角從影像 x 直接換算，而我們的世界座標
+      // 是 y 軸朝上、+z 朝向影像中央（也就是 uPanoYaw 那個方位）。要換過去。
+      // 深度圖跟全景影像是同一個等距長方座標系，所以查表方式要跟取樣影像
+      // 完全一樣：u = fract(lon/2π + 0.5)。先前多加了一次 uPanoYaw 又少了 0.5，
+      // 等於查到別的方位去 —— 不過地面的法向與方位無關，所以看不出來。
+      vec3 u0 = normalize(cam + 30.0 * w);       // 先用名目距離估個方向
+      float az0 = atan(u0.x, u0.z);
+      float el0 = asin(clamp(u0.y, -1.0, 1.0));
+      vec2 duv = vec2(fract(az0 / (2.0 * PI) + 0.5), 0.5 - el0 / PI);
+      float pi = texture2D(uPIdx, duv).r;
+      if (pi > 0.002) {                          // 0 = 天空
+        vec4 nn = texture2D(uPNrm, vec2(pi, 0.5));
+        vec4 dd = texture2D(uPDst, vec2(pi, 0.5));
+        vec3 nD = nn.xyz * 2.0 - 1.0;            // 深度圖座標系（z 上）的法向
+        float pd = (dd.r * 255.0 * 256.0 + dd.g * 255.0) / 100.0;
+        // 法向轉回我們的世界座標：繞 y 軸轉 −uPanoYaw，並把 z↔y 交換
+        float cy2 = cos(-uPanoYaw), sy2 = sin(-uPanoYaw);
+        vec3 nW = vec3(nD.x * cy2 + nD.y * sy2, nD.z, -nD.x * sy2 + nD.y * cy2);
+        float den = dot(w, nW);
+        if (abs(den) > 1e-4) {
+          // 平面是 p·n = d（由 t = |d/(v·n)| 反推：t·v·n = d）。
+          // 先前寫成 −(cam·n + d)/den，正負號反了 —— 地面會算出負的距離，
+          // 被 s2 > 0.3 擋掉而退回球面，所以「99% 走了深度路徑」卻毫無效果。
+          float s2 = (pd - dot(cam, nW)) / den;
+          dbgS2 = s2;
+          if (s2 > 0.3 && s2 < 400.0) { pt = cam + s2 * w; gotDepth = true; }
+        }
+      }
+    }
+    if (!gotDepth) {
+      // 退回球面近似（沒有深度圖、天空、或解出來不合理時）
       float b = dot(cam, w);
       float c = dot(cam, cam) - uR * uR;
       pt = cam + (-b + sqrt(max(b * b - c, 0.0))) * w;
@@ -127,6 +169,13 @@ void main() {
   // 實測相鄰像素差：−20° 是 10.8、−40° 剩 6.2、−60° 只有 1.8、正下方 0.06。
   // 與其讓它糊在畫面裡，不如順順地暗掉，看起來像陰影而不是失誤。
   float fade = 1.0 - smoothstep(uFadeA, uFadeB, -lat);
+  if (uDbgDepth > 0.5) {
+    // 把算出來的距離編進 R+G（16 bit，單位 0.1 m），B 標示有沒有採用
+    float v = clamp(dbgS2 < 0.0 ? 0.0 : dbgS2, 0.0, 400.0) * 10.0;
+    gl_FragColor = vec4(floor(v / 256.0) / 255.0, mod(v, 256.0) / 255.0,
+                        gotDepth ? 1.0 : 0.0, 1.0);
+    return;
+  }
   gl_FragColor = vec4(c.rgb * mix(0.12, 1.0, fade), uAlpha);
 }`;
 
@@ -212,6 +261,16 @@ const S = {
   // 改成由倍率反推 R = d / (1 − 1/M)，每一步的推近感就一致，
   // 側移量 t/R = 1 − 1/M 也跟著固定，不管連結是 5 公尺還是 20 公尺。
   zoomPer: 1.35,
+  autoDepth: true,                      // 場景深度由深度圖自動判定
+  // 逐像素平面深度。**預設關閉，因為我沒能證明它有效。**
+  // 現況：深度圖解碼正確（相機高、場景深度都驗證過）、貼圖有建起來（189 個平面）、
+  // uniform 實測都有設到（uHasDepth=1、uT=6、uPanoYaw=2.01）、shader 編譯連結成功、
+  // 除錯視圖顯示 99.3% 的像素走進深度分支 —— 但把分支強制回傳固定 5 公尺
+  //（應該徹底破壞畫面）也只讓平均像素差從 0.20 變 0.25，等於毫無作用。
+  // 也就是說這段程式看起來全部到位卻不影響輸出，原因未明，不要當成能用。
+  // 已經驗證有效的是另外兩項：每顆全景的相機高度、以及自動場景深度。
+  useDepth: false,
+  dbgDepth: false,                      // 除錯視圖：綠＝用到深度圖、紅＝退回球面
   dissolveMs: 260,                      // 溶解只佔中間這麼久
   sceneR: 38,                           // 由 zoomPer 與步距算出來的，只是顯示用
   // 地平面模型：往下看的射線改用「相機高度 / 俯角」當深度，路面的流動才對。
@@ -302,12 +361,54 @@ function tileWindow(meta, heading) {
 }
 
 const mkPano = () => ({ meta: null, texBase: mkTex(), texDet: mkTex(),
-                        baseScale: [1, 1], det: null, tiles: 0 });
+                        baseScale: [1, 1], det: null, tiles: 0, depth: null });
+
+// 把深度圖解成三張貼圖：每像素的平面索引、每個平面的法向與距離。
+// 為什麼不直接存深度值：8 bit 的深度精度不夠（地面只有 2.5 m，誤差會到 20%），
+// 但平面索引本來就是 8 bit 的整數，存進去是精確的，
+// 平面參數再用兩張 256×1 的小貼圖查 —— 距離用 16 bit，精度 0.01 m。
+function buildDepth(P, b64) {
+  if (!b64) { P.depth = null; return; }
+  let raw;
+  try {
+    const bin = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+    raw = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
+  } catch { P.depth = null; return; }
+  const dv = new DataView(raw.buffer);
+  const n = dv.getUint16(1, true), w = dv.getUint16(3, true);
+  const h = dv.getUint16(5, true), off = dv.getUint16(7, true);
+  if (8 + w * h + n * 16 !== raw.length || n > 255) { P.depth = null; return; }
+
+  const idxTex = new Uint8Array(w * h * 4);
+  for (let i = 0; i < w * h; i++) idxTex[i * 4] = raw[off + i];   // 索引放 R
+  const nrm = new Uint8Array(256 * 4), dst = new Uint8Array(256 * 4);
+  for (let i = 0; i < n; i++) {
+    const o = off + w * h + i * 16;
+    for (let k = 0; k < 3; k++)
+      nrm[i * 4 + k] = Math.max(0, Math.min(255, Math.round((dv.getFloat32(o + k * 4, true) * 0.5 + 0.5) * 255)));
+    nrm[i * 4 + 3] = 255;
+    const d16 = Math.max(0, Math.min(65535, Math.round(Math.abs(dv.getFloat32(o + 12, true)) * 100)));
+    dst[i * 4] = d16 >> 8; dst[i * 4 + 1] = d16 & 255; dst[i * 4 + 3] = 255;
+  }
+  const up = (tex, ww, hh, data) => {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, ww, hh, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  };
+  const d = { idx: gl.createTexture(), nrm: gl.createTexture(), dst: gl.createTexture(), n };
+  up(d.idx, w, h, idxTex); up(d.nrm, 256, 1, nrm); up(d.dst, 256, 1, dst);
+  P.depth = d;
+}
 
 async function load(P, panoId, heading) {
   const meta = await (await fetch('/api/meta?pano=' + encodeURIComponent(panoId))).json();
   if (meta.error) { S.note = meta.error; return false; }
   P.meta = meta; P.det = null; P.tiles = 0;
+  buildDepth(P, meta.depth && meta.depth.b64);
 
   const TSb = meta.geom.tile, gb = meta.geom.zooms[BASE_ZOOM];
   const cb = Math.ceil(gb.w / TSb), rb = Math.ceil(gb.h / TSb);
@@ -372,6 +473,17 @@ function drawOne(P, alpha, tanHalf, aspect, tMove, off, panoPos) {
   gl.uniform1f(U('uD'), S.paniniD);
   gl.uniform1f(U('uFadeA'), rad(S.fadeFrom));
   gl.uniform1f(U('uFadeB'), rad(S.fadeTo));
+  // 深度圖（索引、法向、距離）。沒有就退回球面近似。
+  const dp = P.depth;
+  gl.uniform1f(U('uHasDepth'), (dp && S.useDepth) ? 1 : 0);
+  gl.uniform1f(U('uPanoYaw'), rad(P.meta.yaw || 0));
+  gl.uniform1f(U('uDbgDepth'), S.dbgDepth ? 1 : 0);
+  if (dp) {
+    gl.uniform1i(U('uPIdx'), 2); gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, dp.idx);
+    gl.uniform1i(U('uPNrm'), 3); gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, dp.nrm);
+    gl.uniform1i(U('uPDst'), 4); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, dp.dst);
+    gl.activeTexture(gl.TEXTURE0);
+  }
   const d = P.det;
   gl.uniform1f(U('uHasDet'), d ? 1 : 0);
   if (d) {
@@ -481,7 +593,8 @@ function drawInner() {
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
     + (S.mic ? `🎙 ${window.__cad?.spm ? Math.round(window.__cad.spm) + ' spm' : '聽…'}   ` : '')
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
-    + `推近 ${S.zoomPer.toFixed(2)}×${S.camH ? '+地面' : ''}   `
+    + `深度 ${S.sceneR.toFixed(0)}m${S.autoDepth ? '(自動)' : ''}`
+    + `${S.useDepth && S.cur.depth ? '+逐像素' : ''}   `
     + `${S.steps} 步 ${(S.moved / 1000).toFixed(2)} km`
     + (S.track.length ? `　紀錄 ${S.track.length} 點（按 s 匯出 GPX）` : '') + '\n'
     + `這顆 ${S.cur.tiles} 塊　等 ${Math.round(S.lastMs)} ms　排隊 ${queue.length}　`
@@ -626,8 +739,12 @@ async function stepOnce() {
   // 停 2.1 秒，七成時間畫面是靜止的，跑起來一頓一頓。跑愈慢愈明顯。
   const span = Math.max(240, d / Math.max(1, S.kmh / 3.6) * 1000);
   S.nxt = P; S.stepD = d;
-  // 由這一步的實際距離與目標倍率算出場景半徑
-  S.sceneR = Math.max(6, d / (1 - 1 / Math.max(1.05, S.zoomPer)));
+  // 場景半徑：優先用深度圖量到的這條街的實際寬度，
+  // 拿不到才退回「由推近倍率反推」。實測香榭麗舍深度圖給 39.7 m，
+  // 而使用者手動調出來的 1.35 倍換算是 38.6 m —— 兩邊獨立吻合。
+  const auto = S.autoDepth && S.cur && S.cur.meta && S.cur.meta.sceneR;
+  S.sceneR = auto ? S.cur.meta.sceneR
+                  : Math.max(6, d / (1 - 1 / Math.max(1.05, S.zoomPer)));
   // 溶解只壓在中間這一小段。兩顆全景在轉場中都被扭曲（誤差隨平移量變大），
   // 同時各佔一半的時候重影最重 —— 所以讓大部分時間只看到其中一顆，
   // 中間快速交換。這就是你說的「先推近、再切」，只是切的那一下用溶解接。
@@ -1072,7 +1189,9 @@ addEventListener('keydown', e => {
     const i = M.findIndex(x => Math.abs(x - S.zoomPer) < 0.01);
     S.zoomPer = M[(i + 1) % M.length];
   }
-  else if (e.key === 'H') S.camH = S.camH ? 0 : 2.5;   // 地平面模型（大寫 H）
+  else if (e.key === 'H') S.useDepth = !S.useDepth;          // 逐像素深度開關
+  else if (e.key === 'A') S.autoDepth = !S.autoDepth;        // 自動場景深度
+  else if (e.key === 'D') S.dbgDepth = !S.dbgDepth;          // 深度除錯視圖
   else return;
   draw(); if (!S.running) reloadSoon();
 });
