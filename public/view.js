@@ -227,6 +227,9 @@ const S = {
   // 說了左轉之後記著，到下一個真的有左邊岔路的路口才用掉；
   // 跑了 200 公尺還沒遇到就放棄（street-runner 驗過的做法）。
   wish: null, wishAt: 0, probedAt: 0,
+  // 依序要跑到的目標點。到 60 公尺內就算到達，換下一個。
+  targets: [], target: null, targetNo: 1,
+  bestToTarget: Infinity, targetSetAt: 0, bestAt: 0,
   // 轉向世代序號。轉向指令下達時，那一步的動畫往往還在跑；動畫結束時
   // stepOnce 會執行 travelDir = aimHead，把剛轉好的方向覆寫回舊連結的角度
   //（實測「回頭」轉了 180° 之後，十幾秒又自己轉回去）。
@@ -253,14 +256,16 @@ let netBytes = 0;
 const fetchTile = async (pano, x, y, z) => {
   const u = 'https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile'
     + `&panoid=${pano}&x=${x}&y=${y}&zoom=${z}&nbt=1&fover=2`;
-  for (let k = 0; k < 2; k++) {
+  // 一定要有逾時。瀏覽器的 fetch 沒有預設逾時，連線掛住就永遠不回 ——
+  // 而 stepOnce 是 await 它的，整個跑步迴圈會靜靜停住不動，也沒有錯誤訊息。
+  for (let k = 0; k < 3; k++) {
     try {
-      const r = await fetch(u);
+      const r = await fetch(u, { signal: AbortSignal.timeout(8000) });
       if (!r.ok) throw new Error(r.status);
       const b = await r.blob();
       netBytes += b.size;
       return await createImageBitmap(b);
-    } catch { if (k) return null; await new Promise(r => setTimeout(r, 120)); }
+    } catch { if (k >= 2) return null; await new Promise(r => setTimeout(r, 150 * (k + 1))); }
   }
   return null;
 };
@@ -307,7 +312,11 @@ const mkPano = () => ({ meta: null, texBase: mkTex(), texDet: mkTex(),
                         baseScale: [1, 1], det: null, tiles: 0 });
 
 async function load(P, panoId, heading) {
-  const meta = await (await fetch('/api/meta?pano=' + encodeURIComponent(panoId))).json();
+  let meta;
+  try {
+    meta = await (await fetch('/api/meta?pano=' + encodeURIComponent(panoId),
+      { signal: AbortSignal.timeout(12000) })).json();
+  } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; return false; }
   if (meta.error) { S.note = meta.error; return false; }
   P.meta = meta; P.det = null; P.tiles = 0;
 
@@ -485,6 +494,8 @@ function drawInner() {
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
     + `推近 ${S.zoomPer.toFixed(2)}×${S.camH ? '+地面' : ''}   `
     + `${S.steps} 步 ${(S.moved / 1000).toFixed(2)} km`
+    + (S.target ? `　⌖ 第 ${S.targetNo} 點 ${Math.round(distM(S.cur.meta, S.target))} m`
+       + (S.targets.length ? `（還有 ${S.targets.length} 個）` : '') : '')
     + (S.track.length ? `　紀錄 ${S.track.length} 點（按 s 匯出 GPX）` : '') + '\n'
     + `這顆 ${S.cur.tiles} 塊　等 ${Math.round(S.lastMs)} ms　排隊 ${queue.length}　`
     + `共 ${(netBytes / 1048576).toFixed(1)} MB\n`
@@ -520,6 +531,8 @@ function micSpeed() {
 
 function pickLink(meta, dir, wish) {
   if (!meta.links.length) return null;
+  // 有目標時，行進方向改成「朝目標」，但仍然只從實際的連結裡挑
+  if (S.target && !wish) dir = bearingTo(meta, S.target);
   const back = (dir + 180) % 360;
   // 不要往回走 —— 只留跟來向夾角大於 60° 的連結
   const fwd = meta.links.filter(l => Math.abs(ad(l.heading, back)) > 60);
@@ -659,6 +672,7 @@ async function stepOnce() {
   if (seq === S.turnSeq) { S.heading = aimHead; S.travelDir = aimHead; }
   S.steps++; S.moved += d;
   trackPoint(P.meta);
+  checkTarget(P.meta);
   if (S.wish) {
     // 有效距離放到 600 公尺。城市街廓比想像的長 —— 曼哈頓的大道間距就有 270 公尺，
     // 原本設 200 公尺會在還沒跑到路口時就自己取消（實測就是這樣）。
@@ -679,7 +693,21 @@ async function stepOnce() {
 
 async function runLoop() {
   while (S.running) {
-    await stepOnce();
+    // 看門狗：一步不該超過 20 秒。超過就把佇列丟掉重來 ——
+    // 任何一個沒預期到的卡點都不會讓整趟靜靜停住。
+    const before = S.steps;
+    const t0 = Date.now();
+    await Promise.race([
+      stepOnce(),
+      (async () => {
+        while (Date.now() - t0 < 20000 && S.steps === before && S.running) await sleep(500);
+      })(),
+    ]);
+    if (S.steps === before && S.running && Date.now() - t0 >= 20000) {
+      S.note = '⚠ 這一步卡住，重新排隊';
+      dropQueue(); fillQueue(); draw();
+      await sleep(500);
+    }
     if (S.steps > 4000) break;
   }
   draw();
@@ -844,6 +872,55 @@ function exportGPX() {
     `pano-runner-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.gpx`,
     'application/gpx+xml');
   S.note = `⇩ 已匯出 ${run.pts.length} 個點　${(run.moved/1000).toFixed(2)} km`;
+  draw();
+}
+
+// 兩點之間的距離（公尺）
+const distM = (a, b) => {
+  const R = 6371000;
+  const dp = rad(b.lat - a.lat), dl = rad(b.lng - a.lng);
+  const h = Math.sin(dp / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+// 從 a 看向 b 的方位角
+const bearingTo = (a, b) => {
+  const p1 = rad(a.lat), p2 = rad(b.lat), dl = rad(b.lng - a.lng);
+  return (Math.atan2(Math.sin(dl) * Math.cos(p2),
+    Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl)) * 180 / Math.PI + 360) % 360;
+};
+
+// 抵達判定與換下一個目標。60 公尺是街景節點的間距量級，再嚴格就永遠到不了。
+function checkTarget(meta) {
+  if (!S.target) return;
+  const now = distM(meta, S.target);
+  if (now < 60) {
+    S.note = `⌖ 到了第 ${S.targetNo} 點（${(S.moved / 1000).toFixed(2)} km）`;
+    nextTarget();
+    return;
+  }
+  if (now < S.bestToTarget - 5) { S.bestToTarget = now; S.bestAt = S.moved; }
+  // 放棄條件：跑了 400 公尺都沒有更接近，或總共跑超過 2.5 公里。
+  // 目標可能落在街廓中間、私有地或路網構不到的地方 —— 沒有這個機制會在它周圍
+  // 無限繞（street-runner 實測跑了 2.2 km 還差 339 m；這次台北實測卡在 205 m
+  // 不動了兩分鐘）。只看總距離不夠，要看「多久沒進步」。
+  if (S.moved - S.bestAt > 400 || S.moved - S.targetSetAt > 2500) {
+    S.note = `⌖ 第 ${S.targetNo} 點到不了（還差 ${Math.round(now)} m），跳過`;
+    nextTarget();
+  }
+}
+
+function nextTarget() {
+  S.target = S.targets.shift() || null;
+  S.bestToTarget = Infinity;
+  S.targetSetAt = S.moved; S.bestAt = S.moved;
+  if (S.target) { S.targetNo++; dropQueue(); fillQueue(); }
+  else { S.note = '⌖ 全部跑完'; S.running = false; finishRoute(); }
+}
+
+function finishRoute() {
+  saveTrack();
+  if (S.track.length > 1) { exportGPX(); }
+  hud.classList.remove('fold');
   draw();
 }
 
@@ -1109,6 +1186,14 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
     S.hFovPer = (S.hFovPer * 3) / n; S.panels = n;
   }
   if (q.has('bottom')) S.bottomDeg = +q.get('bottom');
+  if (q.get('targets')) {
+    S.targets = q.get('targets').split('|').map(t => {
+      const [la, ln] = t.split(',').map(Number);
+      return isFinite(la) && isFinite(ln) ? { lat: la, lng: ln } : null;
+    }).filter(Boolean);
+    S.target = S.targets.shift() || null;
+    S.targetNo = 2;                       // 使用者點的第 1 個是起跑點
+  }
   if (q.has('hfov')) S.hFovPer = +q.get('hfov');
   // 直接給螢幕尺寸與距離，程式自己算出幾何正確的水平視野。
   // sw = 單片可視寬度(mm)（單螢幕就是整片寬），dist = 眼睛到螢幕(mm)

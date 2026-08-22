@@ -11,7 +11,9 @@ const el = id => document.getElementById(id);
 const map = el('map'), ink = el('ink'), ctx = ink.getContext('2d');
 
 const V = { lat: 48.8698, lng: 2.3078, z: 15 };     // 預設：香榭麗舍
-let start = null, aim = null;                        // {lat,lng} / 朝向角度
+// 使用者點的一串點：第 1 個是起跑點，之後每個都是要依序跑到的目標。
+// 朝向由起跑點指向第 2 個點自動決定 —— 不需要再單獨點一次方向。
+let pts = [];
 let shown = null;                                    // 現在畫在地圖上的那一趟
 
 // ── Web Mercator ──
@@ -94,22 +96,37 @@ function drawInk() {
       ctx.fillStyle = col; ctx.beginPath(); ctx.arc(s2.x, s2.y, 6, 0, 7); ctx.fill();
     }
   }
-  if (!start) return;
-  const p = toScreen(start);
-  if (aim !== null) {
-    const r = 78, a = (aim - 90) * Math.PI / 180;
-    ctx.strokeStyle = '#6fd08c'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(p.x, p.y);
-    ctx.lineTo(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r); ctx.stroke();
+  if (!pts.length) return;
+
+  const sp = pts.map(toScreen);
+  // 點與點之間連線
+  if (sp.length > 1) {
+    ctx.strokeStyle = 'rgba(111,208,140,.85)'; ctx.lineWidth = 2.5;
+    ctx.setLineDash([7, 5]); ctx.lineJoin = 'round';
     ctx.beginPath();
-    for (const s of [-0.42, 0.42]) {
-      ctx.moveTo(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r);
-      ctx.lineTo(p.x + Math.cos(a + s) * (r - 17), p.y + Math.sin(a + s) * (r - 17));
+    sp.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y));
+    ctx.stroke(); ctx.setLineDash([]);
+    // 起跑方向的箭頭
+    const a = Math.atan2(sp[1].y - sp[0].y, sp[1].x - sp[0].x);
+    ctx.strokeStyle = '#6fd08c'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (const t of [-0.45, 0.45]) {
+      ctx.moveTo(sp[0].x + Math.cos(a) * 46, sp[0].y + Math.sin(a) * 46);
+      ctx.lineTo(sp[0].x + Math.cos(a + t) * 30, sp[0].y + Math.sin(a + t) * 30);
     }
     ctx.stroke();
   }
-  ctx.fillStyle = '#6fd08c'; ctx.strokeStyle = '#0d0e10'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, 7); ctx.fill(); ctx.stroke();
+  // 編號標記：起點綠、中途白、終點紅
+  sp.forEach((q, i) => {
+    const last = i === sp.length - 1;
+    ctx.fillStyle = i === 0 ? '#6fd08c' : (last && sp.length > 1 ? '#e06060' : '#dfe3ea');
+    ctx.strokeStyle = '#0d0e10'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(q.x, q.y, 11, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#0d0e10';
+    ctx.font = '600 12px -apple-system, "PingFang TC", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(i + 1), q.x, q.y + 0.5);
+  });
 }
 
 // ── 操作 ──
@@ -173,17 +190,29 @@ addEventListener('resize', drawMap);
 
 function click(sx, sy) {
   const p = toLL(sx, sy);
-  if (!start) { start = p; aim = null; check(); }
-  else if (aim === null) { aim = bearing(start, p); say(); }
-  else { start = p; aim = null; check(); }
+  if (!pts.length) { pts.push(p); check(); }      // 第一個點要先確認那裡有街景
+  else { pts.push(p); say(); }
   drawInk();
 }
 
+// 沿著點列的總長度（公里）
+const routeKm = () => {
+  let m = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], R = 6371000, rad = x => x * Math.PI / 180;
+    const dp = rad(b.lat - a.lat), dl = rad(b.lng - a.lng);
+    const h = Math.sin(dp / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dl / 2) ** 2;
+    m += 2 * R * Math.asin(Math.sqrt(h));
+  }
+  return m / 1000;
+};
+
 const say = () => {
-  el('step').textContent = start && aim !== null
-    ? `起跑點 ${start.lat.toFixed(5)}, ${start.lng.toFixed(5)}　朝向 ${Math.round(aim)}°　可以開跑了`
-    : start ? '再點一下決定朝哪個方向跑。' : '先在地圖上點一下「起跑點」。';
-  el('start').disabled = !(start && aim !== null);
+  const n = pts.length;
+  el('step').textContent = !n ? '先在地圖上點「起跑點」。'
+    : n === 1 ? '再點一個點決定往哪跑（可以繼續點，會依序跑過去）。'
+    : `${n} 個點　直線距離約 ${routeKm().toFixed(2)} km　可以開跑了`;
+  el('start').disabled = n < 2;
 };
 
 // 按開始之前先確認那裡真的有街景 —— 沒有的話當場說，不要跳過去才看到一片黑
@@ -191,9 +220,10 @@ async function check() {
   el('start').disabled = true;
   el('step').textContent = '看看那裡有沒有街景…';
   try {
-    const r = await fetch(`/api/find?ll=${start.lat},${start.lng}&r=60`).then(r => r.json());
-    if (r.error) { el('step').textContent = '⚠ 這附近 60 公尺內沒有街景，換個點。'; start = null; drawInk(); return; }
-    start.pano = r.pano;
+    const s0 = pts[0];
+    const r = await fetch(`/api/find?ll=${s0.lat},${s0.lng}&r=60`).then(r => r.json());
+    if (r.error) { el('step').textContent = '⚠ 這附近 60 公尺內沒有街景，換個點。'; pts = []; drawInk(); return; }
+    s0.pano = r.pano;
     say();
   } catch { el('step').textContent = '⚠ 查不到（伺服器沒回應？）'; }
 }
@@ -209,7 +239,7 @@ async function search() {
     const j = await (await fetch(u)).json();
     if (!j.length) { el('step').textContent = '找不到這個地方。'; return; }
     V.lat = +j[0].lat; V.lng = +j[0].lon; V.z = 16;
-    start = null; aim = null; shown = null;
+    pts = []; shown = null;
     drawMap(); say();
   } catch { el('step').textContent = '搜尋失敗。'; }
 }
@@ -230,7 +260,7 @@ el('quick').onclick = e => {
   if (i === undefined) return;
   const [, lat, lng, z] = QUICK[i];
   V.lat = lat; V.lng = lng; V.z = z;
-  start = null; aim = null; shown = null;
+  pts = []; shown = null;
   drawMap(); say();
 };
 
@@ -332,7 +362,7 @@ for (const k of KEEP) el(k)?.addEventListener('change', remember);
 el('kmh').oninput = e => el('kmhv').textContent = e.target.value;
 el('mic').onchange = e => { el('micnote').style.display = e.target.checked ? '' : 'none'; remember(); };
 el('reset').onclick = () => {
-  start = null; aim = null; shown = null;
+  pts = []; shown = null;
   // 順便把記住的選項清掉 —— 不然「重設」只重設選點，設定還是舊的，
   // 使用者會覺得「怎麼跟上次不一樣」卻找不到原因。
   try { localStorage.removeItem('pr-opts'); } catch {}
@@ -344,9 +374,12 @@ el('reset').onclick = () => {
 };
 el('start').onclick = () => {
   remember();
+  const head = bearing(pts[0], pts[1]);
   const p = new URLSearchParams({
-    ll: `${start.lat.toFixed(6)},${start.lng.toFixed(6)}`,
-    head: Math.round(aim),
+    ll: `${pts[0].lat.toFixed(6)},${pts[0].lng.toFixed(6)}`,
+    head: Math.round(head),
+    // 第 2 個點之後都是要依序跑到的目標
+    targets: pts.slice(1).map(q => `${q.lat.toFixed(6)},${q.lng.toFixed(6)}`).join('|'),
     kmh: el('kmh').value,
     panels: el('panels').value === 'pan' ? '1' : el('panels').value,
     proj: el('panels').value === 'pan' ? 'pan' : 'flat',
