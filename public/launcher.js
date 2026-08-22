@@ -337,7 +337,7 @@ el('reset').onclick = () => {
   // 使用者會覺得「怎麼跟上次不一樣」卻找不到原因。
   try { localStorage.removeItem('pr-opts'); } catch {}
   el('kmh').value = 12; el('kmhv').textContent = '12';
-  el('panels').value = '3'; el('zoom').value = '4';
+  el('panels').value = 'pan'; el('zoom').value = '4';
   el('mic').checked = false; el('voice').checked = true;
   el('micnote').style.display = 'none';
   drawMap(); say();
