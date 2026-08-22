@@ -537,11 +537,16 @@ function drawInner() {
     // 中央的像素是方的，所以由「下緣要停在哪」反推高度。
     const hs = rad(S.span / 2), D = S.paniniD;
     const sc = D < 0 ? hs : Math.sin(hs) * (D + 1) / (D + Math.cos(hs));
-    const need = Math.round(Math.tan(rad(S.bottomDeg + S.pitch)) * w / sc);
+    const need = Math.round(Math.tan(rad(S.bottomDeg)) * w / sc);
     if (need <= h) { vh = need; y0 = Math.round((h - vh) / 2); }
   }
   if (S.fit && S.proj !== 'pan') {
-    S.fov = 2 * (S.bottomDeg + S.pitch);
+    // 垂直視野只由「下緣角度」決定，**不要把仰角加進來**。
+    // 先前寫成 2×(下緣 + 仰角)，本意是讓下緣固定在 −26°，但副作用是
+    // 仰角在改變視野大小而不是旋轉視角：往上拖到 pitch < −26 時 fov 變負數，
+    // 畫面直接上下翻轉。仰角應該純粹旋轉，下緣跟著一起移動才是對的
+    //（抬頭本來就該讓下方的馬賽克掉出畫面）。
+    S.fov = 2 * S.bottomDeg;
     const hf = Math.max(20, Math.min(110, S.hFovPer));
     const need = Math.round(pw * Math.tan(rad(S.fov / 2)) / Math.tan(rad(hf / 2)));
     if (need <= h) { vh = need; y0 = Math.round((h - vh) / 2); }
@@ -1148,7 +1153,7 @@ addEventListener('mouseup', () => { dragging = false; cv.classList.remove('drag'
 addEventListener('mousemove', e => {
   if (!dragging) return;
   S.heading += (e.clientX - lastX) * 0.18;
-  S.pitch = Math.max(-50, Math.min(50, S.pitch + (e.clientY - lastY) * 0.12));
+  S.pitch = Math.max(-35, Math.min(35, S.pitch + (e.clientY - lastY) * 0.12));
   lastX = e.clientX; lastY = e.clientY;
   draw(); if (!S.running) reloadSoon();
 });
