@@ -14,6 +14,23 @@ const V = { lat: 48.8698, lng: 2.3078, z: 15 };     // 預設：香榭麗舍
 // 使用者點的一串點：第 1 個是起跑點，之後每個都是要依序跑到的目標。
 // 朝向由起跑點指向第 2 個點自動決定 —— 不需要再單獨點一次方向。
 let pts = [];
+// 目前視野內的景點。地圖一動就重抓（節流過），只在放大到看得清時才顯示名字。
+let lms = [], lmTimer = null;
+
+function loadLandmarks() {
+  clearTimeout(lmTimer);
+  lmTimer = setTimeout(async () => {
+    if (V.z < 12) { lms = []; drawInk(); return; }   // 太遠就不顯示，會糊成一團
+    const { w, h } = size();
+    const nw = toLL(0, 0), se = toLL(w, h);
+    try {
+      const r = await fetch(`/api/landmarks?bbox=${se.lat},${nw.lng},${nw.lat},${se.lng}`);
+      const j = await r.json();
+      lms = j.items || [];
+    } catch { lms = []; }
+    drawInk();
+  }, 200);
+}
 let shown = null;                                    // 現在畫在地圖上的那一趟
 
 // ── Web Mercator ──
@@ -75,6 +92,7 @@ function drawMap() {
   }
   for (const [k, img] of cache) if (!keep.has(k)) img.style.display = 'none';
   const zl = el('zlvl'); if (zl) zl.textContent = 'z' + V.z;
+  loadLandmarks();
   drawInk();
 }
 
@@ -96,6 +114,37 @@ function drawInk() {
       ctx.fillStyle = col; ctx.beginPath(); ctx.arc(s2.x, s2.y, 6, 0, 7); ctx.fill();
     }
   }
+  // ── 景點 ──
+  // 先畫點，再畫名字，這樣名字不會被別的點蓋住。
+  // 縮放不夠大時只畫點不畫名字，免得整片都是字。
+  const showName = V.z >= 14;
+  const drawn = [];
+  for (const l of lms) {
+    const q = toScreen(l);
+    if (q.x < -40 || q.y < -20 || q.x > innerWidth + 40 || q.y > innerHeight + 20) continue;
+    ctx.fillStyle = 'rgba(240,180,90,.95)';
+    ctx.strokeStyle = 'rgba(20,20,24,.9)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(q.x, q.y, 5, 0, 7); ctx.fill(); ctx.stroke();
+    drawn.push({ l, q });
+  }
+  if (showName) {
+    ctx.font = '500 12px -apple-system, "PingFang TC", sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const taken = [];
+    for (const { l, q } of drawn) {
+      const wtxt = ctx.measureText(l.name).width;
+      const box = { x: q.x + 9, y: q.y - 8, w: wtxt + 8, h: 16 };
+      // 標籤重疊就跳過，寧可少顯示幾個也不要疊成一團
+      if (taken.some(t => box.x < t.x + t.w && box.x + box.w > t.x
+                       && box.y < t.y + t.h && box.y + box.h > t.y)) continue;
+      taken.push(box);
+      ctx.fillStyle = 'rgba(14,15,18,.78)';
+      ctx.fillRect(box.x - 4, box.y, box.w, box.h);
+      ctx.fillStyle = '#f0c07a';
+      ctx.fillText(l.name, box.x, q.y + 0.5);
+    }
+  }
+
   if (!pts.length) return;
 
   const sp = pts.map(toScreen);
@@ -188,12 +237,52 @@ addEventListener('keydown', e => {
 
 addEventListener('resize', drawMap);
 
+// 點到景點就用景點的座標（吸附），並記住名字
+function nearestLandmark(sx, sy) {
+  let best = null, bd = 22;                     // 22 px 內算點到
+  for (const l of lms) {
+    const q = toScreen(l);
+    const d = Math.hypot(q.x - sx, q.y - sy);
+    if (d < bd) { bd = d; best = l; }
+  }
+  return best;
+}
+
 function click(sx, sy) {
-  const p = toLL(sx, sy);
-  if (!pts.length) { pts.push(p); check(); }      // 第一個點要先確認那裡有街景
-  else { pts.push(p); say(); }
+  const lm = nearestLandmark(sx, sy);
+  const p = lm ? { lat: lm.lat, lng: lm.lng, lm } : toLL(sx, sy);
+  pts.push(p);
+  // 每個點都吸到最近的街景。景點座標是建築中心，常常不在路上 ——
+  // 不吸的話跑步時會一直靠近卻永遠到不了（抵達門檻是 60 公尺）。
+  snap(pts.length - 1);
   drawInk();
 }
+
+async function snap(i) {
+  const p = pts[i];
+  el('start').disabled = true;
+  el('step').textContent = p.lm ? `找「${p.lm.name}」最近的街景…` : '看看那裡有沒有街景…';
+  try {
+    const r = await fetch(`/api/find?ll=${p.lat},${p.lng}&r=60`).then(x => x.json());
+    if (r.error || !r.lat) {
+      el('step').textContent = '⚠ 這附近沒有街景，換個點。';
+      pts.splice(i, 1); drawInk(); return;
+    }
+    const moved = Math.round(distM(p, r));
+    p.lat = r.lat; p.lng = r.lng; p.pano = r.pano; p.snap = moved;
+    drawInk(); say();
+    if (moved > 40) {
+      el('step').textContent += `（${p.lm ? p.lm.name : '該點'} 吸到 ${moved} m 外的路上）`;
+    }
+  } catch { el('step').textContent = '⚠ 查不到（伺服器沒回應？）'; }
+}
+
+const distM = (a, b) => {
+  const R = 6371000, rad = x => x * Math.PI / 180;
+  const dp = rad(b.lat - a.lat), dl = rad(b.lng - a.lng);
+  const h = Math.sin(dp / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
 
 // 沿著點列的總長度（公里）
 const routeKm = () => {
@@ -211,22 +300,11 @@ const say = () => {
   const n = pts.length;
   el('step').textContent = !n ? '先在地圖上點「起跑點」。'
     : n === 1 ? '再點一個點決定往哪跑（可以繼續點，會依序跑過去）。'
-    : `${n} 個點　直線距離約 ${routeKm().toFixed(2)} km　可以開跑了`;
+    : `${n} 個點　約 ${routeKm().toFixed(2)} km`
+      + (pts.filter(q => q.lm).length ? `　含 ${pts.filter(q => q.lm).length} 個景點` : '')
+      + '　可以開跑了';
   el('start').disabled = n < 2;
 };
-
-// 按開始之前先確認那裡真的有街景 —— 沒有的話當場說，不要跳過去才看到一片黑
-async function check() {
-  el('start').disabled = true;
-  el('step').textContent = '看看那裡有沒有街景…';
-  try {
-    const s0 = pts[0];
-    const r = await fetch(`/api/find?ll=${s0.lat},${s0.lng}&r=60`).then(r => r.json());
-    if (r.error) { el('step').textContent = '⚠ 這附近 60 公尺內沒有街景，換個點。'; pts = []; drawInk(); return; }
-    s0.pano = r.pano;
-    say();
-  } catch { el('step').textContent = '⚠ 查不到（伺服器沒回應？）'; }
-}
 
 // ── 搜尋 ──
 async function search() {
