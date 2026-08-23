@@ -46,6 +46,12 @@ const api2 = async (host, params) => {
 
 const chunk = (a, n) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 const views = o => Object.values(o || {}).reduce((a, b) => a + (b || 0), 0);
+const haversine = (a1, o1, a2, o2) => {
+  const R = 6371000, r = x => x * Math.PI / 180;
+  const dp = r(a2 - a1), dl = r(o2 - o1);
+  const h = Math.sin(dp / 2) ** 2 + Math.cos(r(a1)) * Math.cos(r(a2)) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
 
 // 百科體開頭要清掉才念得下去。原文長這樣：
 //   「羅浮宮（法語：Palais du Louvre，發音：[palɛ dy luvʁ]，中國大陸譯盧浮宮）是一座位於…」
@@ -85,7 +91,10 @@ export function nameFrom(extract, fallback) {
   const t = (extract || '').trim();
   // 切在第一個「結構詞」之前。順序有意義：又名/又稱要先切，
   // 不然「少女塔又名勒安得耳塔」會整串被當成名字（實測伊斯坦堡就是這樣）。
-  const m = /^(.{2,16}?)(?=又名|又稱|亦稱|舊稱|通稱|簡稱|是一|是位|是個|是[^，。]{0,10}的|是|為一|為位|為|係|位於|坐落|建於|，|。|、|（|\()/.exec(t);
+  // 「或」「以往」也要切 —— 實測跑出「新清真寺或蘇丹皇太后清真寺」
+  // 與「艾米諾努以往」（原文是「艾米諾努（土耳其語…）以往是…」，
+  // 括號被清掉之後就黏在一起了）。
+  const m = /^(.{2,16}?)(?=又名|又稱|亦稱|舊稱|通稱|簡稱|或稱|或|以往|過去|曾是|曾經|現為|是一|是位|是個|是[^，。]{0,10}的|是|為一|為位|為|係|位於|坐落|建於|，|。|、|（|\()/.exec(t);
   let n = m && m[1].trim();
   // 完全切不出來（沒有任何結構詞）就取前 12 個字，總比整段當標題好
   if (!n || n.length < 2) n = t.slice(0, 12).replace(/[，。].*$/, '');
@@ -149,6 +158,54 @@ async function placeFilter(titles) {
   }
   return keep;
 }
+// OpenStreetMap 的實體地標。維基的 geosearch 會漏 —— 漏的原因是條目本身
+// 沒有掛座標（羅浮宮就是這樣，只找得到金字塔和地鐵站），而 OSM 是照著
+// 地面上真的有的東西畫的，不會漏。
+// 實測伊斯坦堡 1.2 公里：OSM 找到 344 個物件、134 個帶 Wikidata 編號，
+// 其中 36 個有中文維基條目 —— geosearch 同一格只找到 11 個。
+async function osmSpots(lat, lng, radius) {
+  const qy = `[out:json][timeout:40];(
+    nwr(around:${radius},${lat},${lng})[tourism~"^(attraction|museum|artwork|viewpoint|gallery)$"];
+    nwr(around:${radius},${lat},${lng})[historic];
+    nwr(around:${radius},${lat},${lng})[amenity~"^(place_of_worship|theatre|fountain)$"];
+  );out center tags 400;`;
+  const r = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST', headers: { 'User-Agent': UA, 'Content-Type': 'text/plain' },
+    body: qy, signal: AbortSignal.timeout(60000),
+  });
+  if (!r.ok) throw new Error('Overpass HTTP ' + r.status);
+  const els = (await r.json()).elements || [];
+  const out = [];
+  for (const e of els) {
+    const q = e.tags?.wikidata;
+    if (!q || !/^Q\d+$/.test(q)) continue;
+    const la = e.lat ?? e.center?.lat, ln = e.lon ?? e.center?.lon;
+    if (la == null || ln == null) continue;
+    out.push({ qid: q, lat: la, lng: ln });
+  }
+  // 同一個 Wikidata 編號可能有好幾個物件（建築外框＋出入口）
+  const seen = new Map();
+  for (const o of out) if (!seen.has(o.qid)) seen.set(o.qid, o);
+  return [...seen.values()];
+}
+
+// Wikidata 編號 → 中英文條目名稱
+async function qidTitles(qids) {
+  const map = new Map();
+  for (const part of chunk(qids, 50)) {
+    const r = await fetch('https://www.wikidata.org/w/api.php?action=wbgetentities&format=json'
+      + '&props=sitelinks&sitefilter=zhwiki|enwiki&ids=' + part.join('|'),
+      { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(20000) });
+    const j = await r.json();
+    for (const [q, e] of Object.entries(j.entities || {})) {
+      const zh = e.sitelinks?.zhwiki?.title, en = e.sitelinks?.enwiki?.title;
+      if (zh && en) map.set(q, { zh, en });
+    }
+    await nap(tune.gapMs);
+  }
+  return map;
+}
+
 // 逐句切開當字幕用
 const sentences = t => (t.match(/[^。！？!?]+[。！？!?]?/g) || []).map(s => s.trim()).filter(s => s.length > 1);
 
@@ -161,12 +218,30 @@ export async function wikiNearby(lat, lng, {
     gslimit: '300',
   });
   const spots = (g.query?.geosearch || []);
-  if (!spots.length) return [];
   const byTitle = new Map(spots.map(s => [s.title, s]));
+
+  // 1b. OSM 補上 geosearch 漏掉的。失敗就算了 —— Overpass 有時候很慢或滿載，
+  //     不能因為它掛掉就整個沒有景點。
+  try {
+    await nap(tune.gapMs);
+    const os = await osmSpots(lat, lng, Math.min(2000, radius));
+    if (os.length) {
+      const t = await qidTitles(os.map(o => o.qid));
+      for (const o of os) {
+        const n = t.get(o.qid);
+        if (!n || byTitle.has(n.en)) continue;
+        byTitle.set(n.en, { title: n.en, lat: o.lat, lon: o.lng,
+                            dist: haversine(lat, lng, o.lat, o.lng) });
+      }
+    }
+  } catch (e) { /* Overpass 掛了就只用 geosearch */ }
+
+  const allSpots = [...byTitle.values()];
+  if (!allSpots.length) return [];
 
   // 2. 中文條目名稱＋熱門度（一次 50 個）
   const cand = [];
-  for (const part of chunk(spots.slice(0, 150), 50)) {
+  for (const part of chunk(allSpots.slice(0, 200), 50)) {
     await nap(tune.gapMs);
     const j = await api('en.wikipedia.org', {
       prop: 'langlinks|pageviews', lllang: 'zh', lllimit: '500',
