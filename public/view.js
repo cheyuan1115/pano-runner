@@ -244,6 +244,7 @@ const S = {
   // 改成「跑過去的時候頭一直轉向它」，視覺上就是繞著它轉，而且不用環路。
   watchLm: null,
   nextLm: null,                         // 前方最近、還沒播過的景點（給 HUD 顯示）
+  indoorRun: 0, lastOutdoor: null,      // 室內連續步數、最後一顆確定在地面的
   targets: [], target: null, targetNo: 1,
   bestToTarget: Infinity, targetSetAt: 0, bestAt: 0,
   // 轉向世代序號。轉向指令下達時，那一步的動畫往往還在跑；動畫結束時
@@ -500,7 +501,9 @@ function drawInner() {
     return;
   }
   hud.textContent =
-    `${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}   ${m.indoor ? '室內' : '戶外'}\n`
+    `${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}   `
+    + (isIndoor(m) ? `⚠ ${m.floor || '室內'}（${m.source || '?'}）` : '戶外')
+    + (indoorIds.size ? `　避開 ${indoorIds.size} 顆` : '') + '\n'
     + `朝向 ${Math.round((S.heading % 360 + 360) % 360)}°   `
     + (S.proj === 'pan'
        ? `${S.paniniD < 0 ? '圓柱' : 'Panini d=' + S.paniniD.toFixed(1)} ${S.span}°\n`
@@ -551,6 +554,14 @@ function micSpeed() {
   return Math.min(S.kmhCap, Math.max(0, (S.micKmh || 0) * fade));
 }
 
+// 這一顆是不是「不想去的地方」。三個訊號都用上：
+//   indoor  有樓層清單（Google 自己的判斷）
+//   !car    不是街景車拍的（scout/innerspace 是三腳架，幾乎都在室內）
+//   below   樓層標籤是 B1、B2、地下…
+// 2026-08-23 實測東京站周邊 60 顆全景，三個訊號都是 100% 命中。
+// 官方 API 的 source=outdoor 參數不能用 —— Google 把新宿站內部歸類為戶外。
+const isIndoor = m => !!(m && (m.indoor || m.below || (m.source && m.source !== 'launch')));
+
 function pickLink(meta, dir, wish) {
   if (!meta.links.length) return null;
   // 「不要往回走」一定要用實際行進方向（傳進來的 dir），不是目標方位。
@@ -562,7 +573,11 @@ function pickLink(meta, dir, wish) {
   const aim = (S.target && !wish) ? bearingTo(meta, S.target) : dir;
   // 不要往回走 —— 只留跟來向夾角大於 60° 的連結
   const fwd = meta.links.filter(l => Math.abs(ad(l.heading, back)) > 60);
-  const cand = fwd.length ? fwd : meta.links;
+  let cand = fwd.length ? fwd : meta.links;
+  // 已知是室內／地下的連結先濾掉。全部都是的話就不濾（總得走）——
+  // 那代表我們已經在地下街裡，交給下面的脫困處理。
+  const out = cand.filter(l => !indoorIds.has(l.id));
+  if (out.length) cand = out;
   if (wish === 'left' || wish === 'right') {
     const sign = wish === 'left' ? -1 : 1;
     // 想轉的那一側、而且偏離直行至少 35° 的岔路
@@ -575,6 +590,34 @@ function pickLink(meta, dir, wish) {
       Math.abs(ad(b.heading, side90)) < Math.abs(ad(a.heading, side90)) ? b : a);
   }
   return cand.reduce((a, b) => Math.abs(ad(b.heading, aim)) < Math.abs(ad(a.heading, aim)) ? b : a);
+}
+
+// 走過而且發現是室內的 pano，記著不要再走進去
+const indoorIds = new Set();
+
+// 地下街脫困。整片地下街的連結全都是室內，靠連結圖爬不出來 ——
+// 實測從東京站地下起跑，400 公尺內經過 115 顆全部是 B1～B5。
+// 只能用座標往外找地面（伺服器端一次搜完，實測 2.5 秒找到 160 公尺外）。
+let escaping = false;
+async function escapeIndoor(meta) {
+  if (escaping) return false;
+  escaping = true;
+  S.note = '⤳ 在地下，往外找地面…'; draw();
+  try {
+    const r = await (await fetch(`/api/findout?ll=${meta.lat},${meta.lng}`,
+      { signal: AbortSignal.timeout(20000) })).json();
+    if (r.error) { S.note = '⚠ ' + r.error; return false; }
+    const P = mkPano();
+    if (!await load(P, r.pano, r.heading)) { S.note = '⚠ 脫困點載不起來'; return false; }
+    dropQueue();
+    S.cur = P; S.travelDir = r.heading; S.heading = r.heading;
+    S.turnSeq++; S.indoorRun = 0;
+    S.lastOutdoor = { P, dir: r.heading };
+    S.note = `⤳ 跳到 ${r.r} m 外的地面`;
+    fillQueue(); draw();
+    return true;
+  } catch { S.note = '⚠ 脫困逾時'; return false; }
+  finally { escaping = false; }
 }
 
 // 預抓佇列。深度 2 —— 只預抓一顆的話，遇到巴黎那種密集街區會剛好打平：
@@ -724,6 +767,27 @@ async function stepOnce() {
     if (!S.watchLm) S.heading = aimHead;
   }
   S.steps++; S.moved += d;
+  // 走到室內了：記下來，並往回退到最後一顆確定在地面的
+  if (isIndoor(P.meta)) {
+    indoorIds.add(P.meta.pano);
+    S.indoorRun = (S.indoorRun || 0) + 1;
+    S.note = `⚠ 走進${P.meta.floor || '室內'}，找路出去`;
+    if (S.lastOutdoor && S.indoorRun >= 2) {
+      // 連兩步都在室內、而且知道地面在哪：退回去掉頭
+      S.cur = S.lastOutdoor.P;
+      S.travelDir = (S.lastOutdoor.dir + 180) % 360;
+      S.heading = S.travelDir;
+      S.turnSeq++; S.indoorRun = 0;
+      S.note = '↩︎ 退回地面，換個方向';
+      dropQueue(); fillQueue(); draw();
+      return;
+    }
+    // 不知道地面在哪（例如一開始就在地下），連五步就用座標跳出去
+    if (S.indoorRun >= 5) { await escapeIndoor(P.meta); return; }
+  } else {
+    S.indoorRun = 0;
+    S.lastOutdoor = { P, dir: S.travelDir };
+  }
   trackPoint(P.meta);
   checkTarget(P.meta);
   maybeNarrate(P.meta);

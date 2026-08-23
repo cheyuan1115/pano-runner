@@ -65,6 +65,32 @@ const PB = pano => '!1m4!1smaps_sv.tactile!11m2!2m1!1b1!2m2!1szh-TW!2stw!3m3!1m2
   + '!9m36!1m3!1e2!2b1!3e2!1m3!1e2!2b0!3e3!1m3!1e3!2b1!3e2!1m3!1e3!2b0!3e3!1m3!1e8!2b0!3e3'
   + '!1m3!1e1!2b0!3e3!1m3!1e4!2b0!3e3!1m3!1e10!2b1!3e2!1m3!1e10!2b0!3e3';
 
+// 從 photometa 取出「這顆是不是室內／地下」的三個獨立訊號。
+// 2026-08-23 實測（東京站地下 vs 巴黎街上）：
+//   P[7]        樓層清單，室內才有值（[[6],[7],[0]]）
+//   box[6][5][2] 拍攝方式："launch" 街景車、"scout"/"innerspace" 三腳架
+//   樓層標籤     藏在鄰居資料裡，東京站地下那顆是 "B1"
+// 官方 API 的 source=outdoor 參數不能用 —— 實測 Google 把新宿站內部歸類為戶外。
+function readIndoor(box, P) {
+  const src = (box[6] && box[6][5] && box[6][5][2]) || '';
+  const floors = P[7] || null;
+  // 樓層標籤：掃鄰居資料裡形如 B1 / 1F / 地下 的字串
+  let label = '';
+  const walk = o => {
+    if (label || o == null) return;
+    if (typeof o === 'string' && /^(B\d|\d+F|地下)/i.test(o)) { label = o; return; }
+    if (Array.isArray(o)) for (const v of o) walk(v);
+  };
+  if (floors) walk(P[3]);
+  return {
+    indoor: !!floors,
+    source: src,                       // launch = 街景車
+    car: src === 'launch',
+    floor: label,                      // B1、2F…
+    below: /^B\d/i.test(label) || /地下/.test(label),
+  };
+}
+
 export async function panoMeta(pano) {
   if (!/^[A-Za-z0-9_-]{22}$/.test(pano || '')) return null;
   const raw = await get('https://www.google.com/maps/photometa/v1?authuser=0&hl=zh-TW&gl=tw&pb=' + PB(pano));
@@ -82,16 +108,23 @@ export async function panoMeta(pano) {
     yaw: n[2] && n[2][2] ? n[2][2][0] : null,
   }));
 
-  const me = { lat: self[2], lng: self[3], el: P[1][1][0] };
+  // 有些全景沒有高度資料（P[1][1] 是 null）—— 直接取 [0] 會炸，
+  // 而 panoMeta 一炸整個載入就失敗，跑步時會看到「街景資料逾時」
+  const me = { lat: self[2], lng: self[3], el: (P[1][1] && P[1][1][0]) ?? 0 };
   // 自己的偏轉角就藏在鄰居清單第一筆（那一筆的 pano id 等於自己）
   const mine = nb.find(n => n.id === pano);
+  const ind = readIndoor(box, P);
 
   return {
     pano,
     ...me,
     yaw: mine ? mine.yaw : 0,
-    // P[7] 有值＝這顆屬於某個樓層集合，也就是室內或地下。這是 Google 自己的判斷。
-    indoor: !!P[7],
+    // 三個獨立訊號，畫面端可以自己選要多嚴格
+    indoor: ind.indoor,                // 有樓層清單＝室內或地下
+    source: ind.source,                // launch / scout / innerspace
+    car: ind.car,                      // 街景車拍的（最可靠的「在路上」訊號）
+    floor: ind.floor,                  // B1、2F…
+    below: ind.below,                  // 樓層標籤是地下
     geom,
     links: (P[6] || []).map(([i, a]) => {
       const n = nb[i];

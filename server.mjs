@@ -117,6 +117,30 @@ createServer(async (req, res) => {
         return json(res, l ? { id, name: l.name, script: l.script || '' } : { error: '沒有這個景點' }, l ? 200 : 404);
       } catch { return json(res, { error: '讀不到景點資料' }, 500); }
     }
+    // 找附近「確定在地面」的街景點。地下街裡所有連結都是室內，
+    // 靠連結圖爬不出來 —— 只能用座標往外找。
+    // 半徑逐圈放大、每圈八個方位；同一顆 pano 只查一次中繼資料。
+    if (u.pathname === '/api/findout') {
+      const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
+      if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
+      const seen = new Set();
+      const toRad = x => x * Math.PI / 180;
+      for (const r of [80, 160, 260, 400]) {
+        for (let b = 0; b < 360; b += 45) {
+          const la = lat + r * Math.cos(toRad(b)) / 111320;
+          const ln = lng + r * Math.sin(toRad(b)) / (111320 * Math.cos(toRad(lat)));
+          const f = await findPano(la, ln, Math.round(r * 0.7));
+          if (!f || seen.has(f.pano)) continue;
+          seen.add(f.pano);
+          const m = await panoMeta(f.pano);
+          if (!m || !m.links.length) continue;
+          if (m.indoor || m.below || (m.source && m.source !== 'launch')) continue;
+          return json(res, { pano: f.pano, lat: m.lat, lng: m.lng,
+                             heading: m.links[0].heading, tried: seen.size, r });
+        }
+      }
+      return json(res, { error: '附近找不到地面街景', tried: seen.size }, 404);
+    }
     if (u.pathname === '/api/meta') {
       const m = await panoMeta(u.searchParams.get('pano'));
       return json(res, m || { error: '查不到這顆全景' }, m ? 200 : 404);
