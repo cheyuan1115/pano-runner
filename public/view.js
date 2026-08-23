@@ -234,6 +234,9 @@ const S = {
   lastSpokeAt: -9999,                   // 上次播報時跑了多遠
   nearbyAt: -9999, nearby: [],          // 附近景點快取
   speaking: false, nowSpeaking: '',
+  // 播報中把視角轉去盯著景點。真的繞一圈需要環形道路，多數景點沒有 ——
+  // 改成「跑過去的時候頭一直轉向它」，視覺上就是繞著它轉，而且不用環路。
+  watchLm: null,
   nextLm: null,                         // 前方最近、還沒播過的景點（給 HUD 顯示）
   targets: [], target: null, targetNo: 1,
   bestToTarget: Infinity, targetSetAt: 0, bestAt: 0,
@@ -484,7 +487,8 @@ function drawInner() {
       + `${(S.moved / 1000).toFixed(2)} km`
       + (S.mic ? `　🎙${window.__cad?.spm ? Math.round(window.__cad.spm) : '…'}` : '')
       + (S.voice ? `　🗣${voiceState()}` : '')
-      + (S.speaking ? `　🔊 ${S.nowSpeaking}`
+      + (S.watchLm ? `　👁 盯著 ${S.watchLm.name}` : '')
+    + (S.speaking ? `　🔊 ${S.nowSpeaking}`
          : S.nextLm ? `　🎧 ${S.nextLm.name} ${Math.round(S.nextLm.d)} m` : '')
       + (S.note ? `　${S.note}` : '');
     return;
@@ -503,6 +507,7 @@ function drawInner() {
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
     + `推近 ${S.zoomPer.toFixed(2)}×${S.camH ? '+地面' : ''}   `
     + `${S.steps} 步 ${(S.moved / 1000).toFixed(2)} km`
+    + (S.watchLm ? `　👁 盯著 ${S.watchLm.name}` : '')
     + (S.speaking ? `　🔊 ${S.nowSpeaking}`
        : S.nextLm ? `　🎧 ${S.nextLm.name} ${Math.round(S.nextLm.d)} m` : '')
     + (S.target ? `　⌖ 第 ${S.targetNo} 點 ${Math.round(distM(S.cur.meta, S.target))} m`
@@ -609,7 +614,13 @@ async function fillLoop() {
     if (!link) link = pickLink(meta, dir, null);      // 這個路口沒有那一側的路，先直行
     if (!link) return;
     const P = mkPano();
-    queue.push({ link, P, done: load(P, link.id, link.heading) });
+    // 預抓要用「屆時實際會看的方向」。播報中視角是盯著景點的，
+    // 跟連結方位可能差一百多度 —— 用連結方位預抓的話，等一下顯示的那一段
+    // 磚塊完全沒抓到，每一步都要現抓一批，畫面就會卡住
+    //（實測盯著景點時有一步停了十五秒）。
+    const viewHead = S.watchLm ? bearingTo({ lat: link.lat, lng: link.lng }, S.watchLm)
+                               : link.heading;
+    queue.push({ link, P, done: load(P, link.id, viewHead) });
   }
 }
 
@@ -624,6 +635,7 @@ const dropQueue = () => {
 
 async function stepOnce() {
   const seq = S.turnSeq;
+  const _t0 = Date.now();
   if (!queue.length) {
     await fillQueue();
     // 還是空的有可能是另一個填充正在進行（或側移跳點還沒回來），等一下再看，
@@ -650,7 +662,13 @@ async function stepOnce() {
   // 動畫佔滿整步的時間。先前是「動 0.8 倍步時、然後 sleep 補足配速」，
   // 而且還被 min(900,…) 夾住 —— 12 km/h 一步 10 公尺時變成動 0.9 秒、
   // 停 2.1 秒，七成時間畫面是靜止的，跑起來一頓一頓。跑愈慢愈明顯。
-  const span = Math.max(240, d / Math.max(1, S.kmh / 3.6) * 1000);
+  // 動畫時間上限 6 秒。街景的取樣點不是等距的 —— 橋上、高架、郊區常常隔著
+  // 七八十公尺沒有點。照速度算的話 79 公尺要走 20 秒，畫面就像卡住
+  //（實測塞納河那座橋就是這樣，而且會誤觸看門狗）。
+  // 超過上限就走快一點，寧可那一段稍微快轉，也不要停在原地二十秒。
+  const want = d / Math.max(1, S.kmh / 3.6) * 1000;
+  const span = Math.min(6000, Math.max(240, want));
+  if (want > 6000) S.note = `⏩ 這一段隔了 ${Math.round(d)} m，快轉通過`;
   S.nxt = P; S.stepD = d;
   // 由這一步的實際距離與目標倍率算出場景半徑
   S.sceneR = Math.max(6, d / (1 - 1 / Math.max(1.05, S.zoomPer)));
@@ -670,17 +688,31 @@ async function stepOnce() {
       S.mix = Math.max(0, Math.min(1, (k - (0.5 - DISS / 2)) / DISS));
       // 只有轉向才需要平滑進出
       const e = k * k * (3 - 2 * k);
-      S.heading = startHead + ad(aimHead, startHead) * e;
+      if (S.watchLm && S.cur && S.cur.meta) {
+        // 播報中：視角追著景點跑。位置一直在變，所以每一格重算方位；
+        // 用比例逼近而不是直接指過去，才不會在經過它的瞬間甩頭。
+        const want = bearingTo(S.cur.meta, S.watchLm);
+        S.heading += ad(want, S.heading) * Math.min(1, 0.06 + 2.5 / span * 16);
+      } else {
+        S.heading = startHead + ad(aimHead, startHead) * e;
+      }
       draw();
       k < 1 ? requestAnimationFrame(tick) : res();
     };
     tick();
   });
-  S.fps.push(frames / (span / 1000)); S.movingMs += span;           // 這次轉場的實際畫格率
+  S.fps.push(frames / (span / 1000)); S.movingMs += span;
+  (S.stepLog = S.stepLog || []).push({ ms: Date.now() - _t0, d: Math.round(d),
+    mv: Math.round(S.moved), wait: Math.round(S.lastMs), q: queue.length });
+  if (S.stepLog.length > 60) S.stepLog.shift();           // 這次轉場的實際畫格率
 
   S.cur = P; S.nxt = null; S.mix = 0; S.tMove = 0;
   // 這一步進行中如果下過轉向指令，就不要用舊連結的角度覆寫方向
-  if (seq === S.turnSeq) { S.heading = aimHead; S.travelDir = aimHead; }
+  if (seq === S.turnSeq) {
+    S.travelDir = aimHead;
+    // 播報中視角是盯著景點的，不要被行進方向蓋掉；播完會自己轉回來
+    if (!S.watchLm) S.heading = aimHead;
+  }
   S.steps++; S.moved += d;
   trackPoint(P.meta);
   checkTarget(P.meta);
@@ -705,17 +737,17 @@ async function stepOnce() {
 
 async function runLoop() {
   while (S.running) {
-    // 看門狗：一步不該超過 20 秒。超過就把佇列丟掉重來 ——
-    // 任何一個沒預期到的卡點都不會讓整趟靜靜停住。
+    // 看門狗：動畫最長 6 秒，加上載入的餘裕，一步超過 25 秒就是真的卡住了。
+    // （先前設 20 秒會誤判 —— 街景取樣點間隔 79 公尺時動畫本來就要跑 20 秒。）
     const before = S.steps;
     const t0 = Date.now();
     await Promise.race([
       stepOnce(),
       (async () => {
-        while (Date.now() - t0 < 20000 && S.steps === before && S.running) await sleep(500);
+        while (Date.now() - t0 < 25000 && S.steps === before && S.running) await sleep(500);
       })(),
     ]);
-    if (S.steps === before && S.running && Date.now() - t0 >= 20000) {
+    if (S.steps === before && S.running && Date.now() - t0 >= 25000) {
       S.note = '⚠ 這一步卡住，重新排隊';
       dropQueue(); fillQueue(); draw();
       await sleep(500);
@@ -943,6 +975,7 @@ function speak(lm) {
   const token = (S.sayToken = (S.sayToken || 0) + 1);
   const mine = () => token === S.sayToken;
 
+  S.watchLm = { lat: lm.lat, lng: lm.lng, name: lm.name };
   const bar = $('lm-bar'), pv = $('lm-photo');
   const layers = [pv.children[0], pv.children[1]];
   let cur = 0, pi = 0, photoTimer = null, textTimer = null;
@@ -978,7 +1011,7 @@ function speak(lm) {
     const done = () => {
       clearInterval(textTimer); clearInterval(photoTimer);
       if (!mine()) return;                     // 舊的收尾不能動到現在這段
-      S.speaking = false; S.nowSpeaking = '';
+      S.speaking = false; S.nowSpeaking = ''; S.watchLm = null;
       bar.classList.remove('on'); pv.classList.remove('on');
       // 喇叭的尾音還在空氣中，晚一點再開始收指令
       setTimeout(() => { window.__speaking = false; }, 800);
@@ -1009,6 +1042,15 @@ function speak(lm) {
   }, 550);
   draw();
 }
+
+// 播報結束後把視角平順轉回行進方向，不要瞬間彈回去
+setInterval(() => {
+  if (S.watchLm || !S.running) return;
+  const off = ad(S.travelDir, S.heading);
+  if (Math.abs(off) < 0.5) return;
+  S.heading += off * 0.12;
+  draw();
+}, 50);
 
 // 每一步重算「前方最近景點」的距離。查詢是每 150 公尺一次，
 // 但顯示的距離要跟著你跑而變，不然數字會卡住不動。
