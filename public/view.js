@@ -1072,7 +1072,10 @@ function speak(lm) {
   S.watchLm = { lat: lm.lat, lng: lm.lng, name: lm.name };
   const bar = $('lm-bar'), pv = $('lm-photo');
   const layers = [pv.children[0], pv.children[1]];
-  // 上一段的照片要先清掉。留著的話下一段開頭會閃一下上一個景點的圖。
+  // 上一段的照片要先清掉，外框也要一起關掉。
+  // 只清圖不關框的話，前一段還沒收尾就接上下一段時（done() 因為序號不符提前 return，
+  // 不會關框），會出現「框開著、裡面沒有圖」的空框 —— 實測 C 情境撞到一次。
+  pv.classList.remove('on');
   for (const el of layers) { el.onload = el.onerror = null; el.classList.remove('on'); el.removeAttribute('src'); }
   let cur = 0, pi = 0, photoTimer = null, textTimer = null;
   $('lm-name').textContent = lm.name;
