@@ -90,7 +90,10 @@ createServer(async (req, res) => {
             ...l,
             audio: `/audio/${encodeURIComponent(l.city)}/${encodeURIComponent(l.id)}.mp3`,
             lines: a.lines || [], marks: a.marks || [],
-            photos: (PHOTOS[l.id] || []).slice(0, 6).map(p => p.url).filter(Boolean),
+            // width 降到 1200 —— 畫面最多顯示 900px 寬，原本的 1600 會拿到
+            // 1920px、每張 300–750 KB，跟街景磚塊搶頻寬
+            photos: (PHOTOS[l.id] || []).slice(0, 6)
+              .map(p => (p.url || '').replace(/width=\d+/, 'width=1200')).filter(Boolean),
           };
         });
       return json(res, { items: hit });

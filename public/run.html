@@ -40,10 +40,18 @@
 <style>
   /* 照片放大到將近半個畫面寬。信箱模式上下本來就是黑邊，
      照片壓在上緣不會擋到街景的可視區。 */
-  #lm-photo { position: fixed; right: 16px; top: 16px; width: 46vw; max-width: 900px;
-              aspect-ratio: 4/3; max-height: 62vh; border-radius: 14px; overflow: hidden;
-              z-index: 7; opacity: 0; transition: opacity .5s;
-              box-shadow: 0 10px 40px rgba(0,0,0,.6); pointer-events: none; }
+  /* 比例由照片本身決定（載入時動態設 aspect-ratio）。
+     維基共享資源的照片比例從 1.33 到 2.52 都有 —— 固定 4:3 配 cover 會把
+     全景照裁掉將近一半，那就是「照片異常」的原因。 */
+  /* 寬高由 JS 依照片的實際比例算好再設 —— CSS 的 aspect-ratio 配上 max-height
+     不會如預期縮放（實測比例設成 2.52 但框仍維持 1.46）。
+     維基的照片比例從 1.33 到 2.52 都有，固定框會把全景照裁掉近一半。 */
+  #lm-photo { position: fixed; right: 16px; top: 16px; width: 676px; height: 450px;
+              border-radius: 14px; overflow: hidden;
+              z-index: 7; opacity: 0;
+              transition: opacity .5s, width .35s, height .35s;
+              box-shadow: 0 10px 40px rgba(0,0,0,.6); pointer-events: none;
+              background: #14161a; }
   #lm-photo.on { opacity: 1; }
   #lm-photo > div { position: absolute; inset: 0; background-size: cover;
                     background-position: center; opacity: 0; transition: opacity .7s; }
