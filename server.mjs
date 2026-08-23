@@ -37,6 +37,28 @@ const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
 // 照片快取放本機。維基會限流，抓過的就不要再抓。
 const PHOTO_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.photocache');
 const VLOG = join(fileURLToPath(new URL('.', import.meta.url)), '.voicelog');
+
+// commons.wikimedia.org/Special:FilePath/<檔名> → upload.wikimedia.org 的直連縮圖。
+// 那個路徑會 302 轉址而且限流很兇；直連的縮圖檔沒有這個問題。
+// 網址不能自己用 md5 算 —— 寬度必須是維基的標準級距，算出來的 1200px 一律 400，
+// 所以還是要問一次 API（一次可以問 50 個），問到的結果記在記憶體裡。
+const thumbCache = new Map();
+async function toThumb(src, width = 1280) {
+  if (!src.includes('Special:FilePath/')) return src;
+  if (thumbCache.has(src)) return thumbCache.get(src);
+  const name = decodeURIComponent(src.split('Special:FilePath/')[1].split('?')[0]);
+  try {
+    const api = 'https://commons.wikimedia.org/w/api.php?action=query&format=json'
+      + '&prop=imageinfo&iiprop=url&iiurlwidth=' + width
+      + '&titles=' + encodeURIComponent('File:' + name);
+    const r = await fetch(api, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12000) });
+    const j = await r.json();
+    const pg = Object.values(j?.query?.pages || {})[0];
+    const url = pg?.imageinfo?.[0]?.thumburl || pg?.imageinfo?.[0]?.url;
+    if (url) { thumbCache.set(src, url); if (thumbCache.size > 4000) thumbCache.clear(); return url; }
+  } catch {}
+  return src;                        // 問不到就走原本那條，至少還能動
+}
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/140.0 Safari/537.36';
 const PORT = 8877;
@@ -124,8 +146,19 @@ createServer(async (req, res) => {
       };
       try { return send(await readFile(f)); } catch {}
       try {
-        const r = await fetch(src, { headers: { 'User-Agent': UA }, redirect: 'follow',
-                                     signal: AbortSignal.timeout(20000) });
+        // 先換成 upload.wikimedia.org 的直連縮圖。
+        // commons 的 Special:FilePath 限流很兇 —— 實測單一連線每兩秒一次
+        // 就有 2/5 回 429；換成直連之後連抓三次都 200 而且愈來愈快。
+        const real = await toThumb(src);
+        // upload 也會限流，只是寬鬆很多。撞到 429 等一下再來 ——
+        // 直接放棄的話畫面端會跳下一張，等於這個景點的照片少一張。
+        let r = null;
+        for (let i = 0; i < 3; i++) {
+          r = await fetch(real, { headers: { 'User-Agent': UA }, redirect: 'follow',
+                                  signal: AbortSignal.timeout(20000) });
+          if (r.status !== 429) break;
+          await new Promise(s => setTimeout(s, 900 * (i + 1)));
+        }
         if (!r.ok) return json(res, { error: '抓不到照片 ' + r.status }, 502);
         const buf = Buffer.from(await r.arrayBuffer());
         await mkdir(PHOTO_DIR, { recursive: true });

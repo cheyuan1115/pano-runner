@@ -1054,6 +1054,18 @@ let audioEl = null;
 // 預載過的音檔（id → HTMLAudioElement）。景點還在 300 公尺外就先抓，
 // 不然 460 KB 的下載會跟磚塊搶頻寬 —— 實測觸發當下有一步慢到二十秒被看門狗抓。
 const preAudio = new Map();
+// 照片也要預抓。檔案不在本機（landmark-photos.json 存的是維基的網址），
+// 第一次要經過 /photo 轉一手約三秒 —— 等播報開始才抓一定來不及。
+// 抓過的會留在伺服器的 .photocache 與瀏覽器快取，之後就是瞬間。
+const prePhoto = new Set();
+function preloadPhotos(lm) {
+  if (!lm || !lm.photos || !lm.photos.length || prePhoto.has(lm.id)) return;
+  prePhoto.add(lm.id);
+  // 只先抓前兩張。後面幾張要播到一半才用得到，那時有的是時間。
+  for (const u of lm.photos.slice(0, 2)) { const i = new Image(); i.src = u; }
+  if (prePhoto.size > 40) prePhoto.delete(prePhoto.values().next().value);
+}
+
 function preloadAudio(lm) {
   if (!lm || preAudio.has(lm.id)) return;
   const a = new Audio();
@@ -1106,10 +1118,17 @@ function speak(lm) {
   // 不會關框），會出現「框開著、裡面沒有圖」的空框 —— 實測 C 情境撞到一次。
   pv.classList.remove('on');
   for (const el of layers) { el.onload = el.onerror = null; el.classList.remove('on'); el.removeAttribute('src'); }
-  let cur = 0, pi = 0, photoTimer = null, textTimer = null;
+  // finished：這一段播完了沒。done() 只是收尾，**不會**換 sayToken，
+  // 所以 mine() 在播完之後仍然是 true —— 一張晚一步載完的照片會呼叫
+  // pv.classList.add('on') 把框重新打開，之後再也沒有人關它。
+  // 那就是「導覽完照片沒有消失」。
+  let cur = 0, pi = 0, photoTimer = null, textTimer = null, finished = false;
   $('lm-name').textContent = lm.name;
   $('lm-text').textContent = (lm.lines && lm.lines[0]) || '';
   bar.classList.add('on');
+  // 第一張立刻開抓。先前是等 audioEl.onloadedmetadata 才開始 ——
+  // 前面還有 550 ms 的延遲，加上第一次抓維基要三秒，照片會比字幕晚很多才出現。
+  setTimeout(() => showPhoto(pi++), 0);
 
   // 照片直接餵給 <img>，不做預載、不轉 blob。
   //
@@ -1122,10 +1141,10 @@ function speak(lm) {
   // 尺寸從 img 自己身上讀，沒有任何中間層可以壞掉。
   const showPhoto = (k, tries = 0) => {
     const ph = lm.photos || [];
-    if (!ph.length || tries >= ph.length || !mine()) return;
+    if (finished || !ph.length || tries >= ph.length || !mine()) return;
     const el = layers[cur ^ 1];
     el.onload = () => {
-      if (!mine() || !el.naturalWidth) return;
+      if (finished || !mine() || !el.naturalWidth) return;
       // 框的寬高依照片的實際比例算，並夾在畫面的上限內
       const ar = el.naturalWidth / el.naturalHeight;
       const maxW = Math.min(900, innerWidth * 0.46);
@@ -1142,7 +1161,7 @@ function speak(lm) {
     // 失敗就等一下再換下一張。立刻連鎖就是「一直閃」。
     el.onerror = () => {
       S.photoFail = (S.photoFail || 0) + 1;
-      if (mine()) setTimeout(() => showPhoto(k + 1, tries + 1), 700);
+      if (mine() && !finished) setTimeout(() => showPhoto(k + 1, tries + 1), 700);
     };
     const url = ph[k % ph.length];
     // 同一個網址再設一次不會觸發 onload（瀏覽器認為沒變），要自己叫
@@ -1158,6 +1177,7 @@ function speak(lm) {
     audioEl.volume = 0.9;
 
     const done = () => {
+      finished = true;                         // 之後載完的照片不可以再把框打開
       clearInterval(textTimer); clearInterval(photoTimer);
       if (!mine()) return;                     // 舊的收尾不能動到現在這段
       S.speaking = false; S.nowSpeaking = ''; S.watchLm = null;
@@ -1181,9 +1201,9 @@ function speak(lm) {
     audioEl.onerror = () => { S.note = `⚠ ${lm.name} 的音檔放不出來`; done(); };
     audioEl.onloadedmetadata = () => {
       if (!mine()) return;
-      showPhoto(pi++);
-      // 照片平均分配在整段導覽裡，但每張至少停 4 秒
+      // 第一張在上面已經開抓了，這裡只排接下來的輪播
       const per = Math.max(4000, (audioEl.duration * 1000) / Math.max(1, (lm.photos || []).length));
+      clearInterval(photoTimer);
       photoTimer = setInterval(() => showPhoto(pi++), per);
     };
     if (audioEl.readyState >= 1) audioEl.onloadedmetadata();
@@ -1223,7 +1243,7 @@ function refreshNext(meta) {
   }
   S.nextLm = next;
   // 進入 300 公尺就先把音檔抓下來
-  if (next && next.d < 300) preloadAudio(next);
+  if (next && next.d < 300) { preloadAudio(next); preloadPhotos(next); }
   return next;
 }
 
