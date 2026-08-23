@@ -37,22 +37,29 @@
   <div id="lm-text"></div>
 </div>
 <style>
-  #lm-photo { position: fixed; right: 14px; top: 14px; width: 30vw; max-width: 460px;
-              aspect-ratio: 4/3; border-radius: 12px; overflow: hidden; z-index: 7;
-              opacity: 0; transition: opacity .5s; box-shadow: 0 8px 32px rgba(0,0,0,.55);
-              pointer-events: none; }
+  /* 照片放大到將近半個畫面寬。信箱模式上下本來就是黑邊，
+     照片壓在上緣不會擋到街景的可視區。 */
+  #lm-photo { position: fixed; right: 16px; top: 16px; width: 46vw; max-width: 900px;
+              aspect-ratio: 4/3; max-height: 62vh; border-radius: 14px; overflow: hidden;
+              z-index: 7; opacity: 0; transition: opacity .5s;
+              box-shadow: 0 10px 40px rgba(0,0,0,.6); pointer-events: none; }
   #lm-photo.on { opacity: 1; }
   #lm-photo > div { position: absolute; inset: 0; background-size: cover;
                     background-position: center; opacity: 0; transition: opacity .7s; }
   #lm-photo > div.on { opacity: 1; }
-  #lm-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 40px;
-            max-width: min(1000px, 78vw); z-index: 7; text-align: center;
+  #lm-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 34px;
+            width: min(1400px, 88vw); z-index: 7; text-align: center;
             opacity: 0; transition: opacity .4s; pointer-events: none; }
   #lm-bar.on { opacity: 1; }
-  #lm-name { font-size: 15px; color: #f0c07a; letter-spacing: 1px; margin-bottom: 6px;
-             text-shadow: 0 2px 8px rgba(0,0,0,.9); }
-  #lm-text { font-size: 21px; line-height: 1.55; color: #fff;
-             text-shadow: 0 2px 10px rgba(0,0,0,.95), 0 0 26px rgba(0,0,0,.7); }
+  #lm-name { font-size: 22px; color: #f0c07a; letter-spacing: 2px; margin-bottom: 10px;
+             font-weight: 600; text-shadow: 0 2px 10px rgba(0,0,0,.95); }
+  #lm-text { font-size: 32px; line-height: 1.5; color: #fff; font-weight: 500;
+             text-shadow: 0 3px 14px rgba(0,0,0,.98), 0 0 34px rgba(0,0,0,.85); }
+  @media (max-height: 700px) {
+    #lm-photo { width: 38vw; max-height: 54vh; }
+    #lm-text { font-size: 26px; }
+    #lm-name { font-size: 18px; }
+  }
 </style>
 <div id="keys" class="fold"><span class="body">空白鍵　開始 / 停止
 ← →　　下個路口左轉 / 右轉
