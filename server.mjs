@@ -44,6 +44,15 @@ const VLOG = join(fileURLToPath(new URL('.', import.meta.url)), '.voicelog');
 // 所以還是要問一次 API（一次可以問 50 個），問到的結果記在記憶體裡。
 const thumbCache = new Map();
 async function toThumb(src, width = 1280) {
+  // 直連原圖的（資料裡有 30 筆）改指到縮圖。路徑本來就帶著 md5 的前兩碼，
+  // 所以這種不用問 API 就能算出來。原圖實測有 6.9 MB —— 跑步時那是跟磚塊搶頻寬。
+  const m = /^(https:\/\/upload\.wikimedia\.org\/wikipedia\/commons)\/([0-9a-f])\/([0-9a-f]{2})\/(.+)$/.exec(src);
+  if (m && !src.includes('/thumb/')) {
+    const file = m[4];
+    const ext = file.split('.').pop().toLowerCase();
+    const tail = ['jpg', 'jpeg'].includes(ext) ? file : file + '.jpg';
+    return `${m[1]}/thumb/${m[2]}/${m[3]}/${file}/${width}px-${tail}`;
+  }
   if (!src.includes('Special:FilePath/')) return src;
   if (thumbCache.has(src)) return thumbCache.get(src);
   const name = decodeURIComponent(src.split('Special:FilePath/')[1].split('?')[0]);
@@ -135,9 +144,15 @@ createServer(async (req, res) => {
     //      症狀是照片一片黑、而且一直閃。
     //   3. 存到本機之後同一張不會再抓第二次，429 從此絕跡。
     if (u.pathname === '/photo') {
-      const src = u.searchParams.get('u') || '';
-      if (!/^https:\/\/(commons|upload)\.wikimedia\.org\//.test(src))
-        return json(res, { error: '只轉維基共享資源' }, 400);
+      let src = u.searchParams.get('u') || '';
+      // 白名單漏了 flickr —— 資料裡有 42 筆是 live.staticflickr.com，
+      // 先前一律 400，那些景點的照片從來就顯示不出來。
+      if (!/^https:\/\/(commons\.wikimedia\.org|upload\.wikimedia\.org|live\.staticflickr\.com)\//.test(src))
+        return json(res, { error: '不是認得的照片來源' }, 400);
+      // 有 72 筆網址沒帶 width，會抓到原圖 —— 實測有一張 6.9 MB，
+      // 跑步時那是跟街景磚塊搶頻寬。沒帶就補上。
+      if (src.includes('Special:FilePath/') && !/[?&]width=/.test(src))
+        src += (src.includes('?') ? '&' : '?') + 'width=1200';
       const key = Buffer.from(src).toString('base64url').slice(-120);
       const f = join(PHOTO_DIR, key + '.jpg');
       const send = body => {

@@ -91,14 +91,18 @@ for (let i = 0; i < todo.length; i += 50) {
     }
   } catch {}
   process.stdout.write(`\r  問縮圖網址 ${Math.min(i + 50, todo.length)}/${todo.length}   `);
+  await sleep(1200);                       // API 也有節流，批次之間停一下
 }
 console.log(`\r  問到 ${thumb.size}/${todo.length} 個縮圖網址        `);
 
 let done = 0, fail = 0, bytes = 0, n = 0;
 const t0 = Date.now();
 const queue = todo.slice();
-// 併發 3 條。upload 比 Special:FilePath 寬鬆很多，但還是會 429，
-// 撞到就退一步再來 —— 開太多只會讓退避時間變長，總時間反而更久。
+// **單線，而且每張之間停一下。**
+// 一開始用 3 條併發，結果 220 張裡失敗 166 張（75%），而維基的 API 直接回
+// 「You are making too many requests to the API」—— 是併發打太兇被整個節流，
+// 不是被封（同一時間單獨抓一張是 200，額度標頭也顯示幾乎沒用掉）。
+// 358 張以每秒一張算約六分鐘，本來就不趕。
 const worker = async () => {
   while (queue.length) {
     const src = queue.shift();
@@ -108,7 +112,8 @@ const worker = async () => {
       try {
         const r = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow',
                                      signal: AbortSignal.timeout(30000) });
-        if (r.status === 429) { await sleep(1500 * (t + 1)); continue; }
+        // 429 要退得夠久。節流是整體的，急著重試只會把自己壓得更死。
+        if (r.status === 429) { await sleep(3000 * (t + 1)); continue; }
         if (!r.ok) break;
         const b = Buffer.from(await r.arrayBuffer());
         await writeFile(keyOf(src), b);
@@ -117,6 +122,7 @@ const worker = async () => {
     }
     if (!ok) fail++;
     n++;
+    await sleep(700);                      // 客氣一點，這是別人的免費資源
     if (n % 10 === 0 || !queue.length) {
       const sec = (Date.now() - t0) / 1000;
       process.stdout.write(`\r  ${n}/${todo.length}　成功 ${done}　失敗 ${fail}　`
@@ -125,6 +131,6 @@ const worker = async () => {
     }
   }
 };
-await Promise.all(Array.from({ length: 3 }, worker));
+await worker();
 console.log(`\n  ${want} 完成：成功 ${done}、失敗 ${fail}、`
   + `${(bytes / 1048576).toFixed(0)} MB、${Math.round((Date.now() - t0) / 1000)} 秒`);
