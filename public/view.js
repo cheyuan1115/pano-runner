@@ -240,6 +240,7 @@ const S = {
   askMode: true,
   asking: null,                         // 正在問的景點
   askedIds: new Set(),                  // 問過的不再問
+  accepting: false,                     // 答應導覽後、路還沒找到的空窗期
   detourFrom: null,                     // 為了看景點而繞路前，原本的目標
   spoken: new Set(),                    // 播過的不再播
   lastSpokeAt: -9999,                   // 上次播報時跑了多遠
@@ -530,6 +531,7 @@ function drawInner() {
          + `${Math.round(hHalfDeg() * 2 * S.panels)}°${S.fit ? '　自動比例' : ''}\n`)
     + (S.panelIdx !== null ? `🖥 ${['左', '中', '右'][S.panelIdx]}片（${S.role === 'master' ? '主控' : '從屬'}）   ` : '')
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
+    + (S.photoFail ? `🖼 照片載不到 ×${S.photoFail}   ` : '')
     + (S.mic ? `🎙 ${window.__cad?.spm ? Math.round(window.__cad.spm) + ' spm' : '聽…'}   ` : '')
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
     + `推近 ${S.zoomPer.toFixed(2)}×${S.camH ? '+地面' : ''}   `
@@ -1053,8 +1055,6 @@ function chime() {
 }
 
 const $ = id => document.getElementById(id);
-// 照片的 blob 網址快取。同一段導覽會輪播同幾張，重看不要再抓一次。
-const photoCache = new Map();
 
 function speak(lm) {
   S.spoken.add(lm.id);
@@ -1072,57 +1072,50 @@ function speak(lm) {
   S.watchLm = { lat: lm.lat, lng: lm.lng, name: lm.name };
   const bar = $('lm-bar'), pv = $('lm-photo');
   const layers = [pv.children[0], pv.children[1]];
+  // 上一段的照片要先清掉。留著的話下一段開頭會閃一下上一個景點的圖。
+  for (const el of layers) { el.onload = el.onerror = null; el.classList.remove('on'); el.removeAttribute('src'); }
   let cur = 0, pi = 0, photoTimer = null, textTimer = null;
   $('lm-name').textContent = lm.name;
   $('lm-text').textContent = (lm.lines && lm.lines[0]) || '';
   bar.classList.add('on');
 
-  // 照片用 blob 載入，只發一次網路請求。
-  // 先前是 new Image() 預載成功後才把網址設成 background-image —— 那是**兩次**請求，
-  // 第二次常常被維基共享資源的 429 擋掉，於是圖顯示不出來、只剩容器的深色底，
-  // 而失敗又立刻跳下一張，所以畫面會一直閃。
-  const showPhoto = async (k, tries = 0) => {
+  // 照片直接餵給 <img>，不做預載、不轉 blob。
+  //
+  // 走過兩條錯路，都留在這裡免得再犯：
+  //   1. new Image() 預載成功後才把網址設成 background-image —— 那是**兩次**請求，
+  //      第二次常被維基的 429 擋掉，照片顯示不出來（黑），失敗又立刻跳下一張（閃）。
+  //   2. 改用 fetch 抓成 blob —— commons.wikimedia.org 沒有開 CORS，全部被擋，
+  //      一張都載不進來。
+  // 現在網址指向自家的 /photo（同源、伺服器端有快取），<img> 只發一次請求，
+  // 尺寸從 img 自己身上讀，沒有任何中間層可以壞掉。
+  const showPhoto = (k, tries = 0) => {
     const ph = lm.photos || [];
     if (!ph.length || tries >= ph.length || !mine()) return;
-    const url = ph[k % ph.length];
-    let obj = photoCache.get(url);
-    if (!obj) {
-      try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
-        if (!r.ok) throw new Error(r.status);
-        obj = URL.createObjectURL(await r.blob());
-        photoCache.set(url, obj);
-        if (photoCache.size > 24) {
-          const old = photoCache.keys().next().value;
-          URL.revokeObjectURL(photoCache.get(old)); photoCache.delete(old);
-        }
-      } catch {
-        // 失敗就等一下再跳下一張，不要立刻連鎖 —— 連鎖就是「一直閃」
-        setTimeout(() => showPhoto(k + 1, tries + 1), 700);
-        return;
-      }
-    }
-    if (!mine()) return;
-    const img = new Image();
-    img.onload = () => {
-      if (!mine()) return;
+    const el = layers[cur ^ 1];
+    el.onload = () => {
+      if (!mine() || !el.naturalWidth) return;
       // 框的寬高依照片的實際比例算，並夾在畫面的上限內
-      const ar = img.naturalWidth / img.naturalHeight;
+      const ar = el.naturalWidth / el.naturalHeight;
       const maxW = Math.min(900, innerWidth * 0.46);
       const maxH = innerHeight * 0.6;
       let w = maxW, h = w / ar;
       if (h > maxH) { h = maxH; w = h * ar; }
       pv.style.width = Math.round(w) + 'px';
       pv.style.height = Math.round(h) + 'px';
-      const next = layers[cur ^ 1];
-      next.style.backgroundImage = `url("${obj}")`;
-      next.classList.remove('on'); void next.offsetWidth; next.classList.add('on');
+      el.classList.add('on');
       layers[cur].classList.remove('on');
       cur ^= 1;
-      pv.classList.add('on');
+      pv.classList.add('on');           // 只有真的畫出來了才顯示外框
     };
-    img.onerror = () => { if (mine()) setTimeout(() => showPhoto(k + 1, tries + 1), 700); };
-    img.src = obj;
+    // 失敗就等一下再換下一張。立刻連鎖就是「一直閃」。
+    el.onerror = () => {
+      S.photoFail = (S.photoFail || 0) + 1;
+      if (mine()) setTimeout(() => showPhoto(k + 1, tries + 1), 700);
+    };
+    const url = ph[k % ph.length];
+    // 同一個網址再設一次不會觸發 onload（瀏覽器認為沒變），要自己叫
+    if (el.getAttribute('src') === url) { if (el.complete) el.onload(); return; }
+    el.src = url;
   };
 
   setTimeout(() => {
@@ -1208,6 +1201,12 @@ async function acceptGuide() {
   const lm = S.asking;
   if (!lm) return false;
   hideAsk();
+  // 這兩行不能少。下面要 await /api/find（最多 8 秒），那段時間裡
+  // maybeNarrate 還會繼續跑：S.asking 已經清掉、S.target 又還沒設好，
+  // 於是它看到「前方有個沒問過的景點」就把詢問框**再叫出來一次** ——
+  // 症狀是說完「導覽」框沒消失，後來一路跑過去、開始播報，框還留在畫面上。
+  S.askedIds.add(lm.id);
+  S.accepting = true;
   S.detourFrom = S.target;
   // 先吸到景點最近的街景點再當目標。景點座標是建築中心（羅浮宮那顆在中庭裡），
   // 直接拿它當目標的話會一直靠近卻進不去 —— 實測繞了 400 公尺還差 190 公尺。
@@ -1222,6 +1221,7 @@ async function acceptGuide() {
   S.target = t;
   S.bestToTarget = Infinity; S.targetSetAt = S.moved; S.bestAt = S.moved;
   S.note = `⌖ 往 ${lm.name} 去`;
+  S.accepting = false;
   dropQueue(); fillQueue(); draw();
   return true;
 }
@@ -1274,7 +1274,9 @@ async function maybeNarrate(meta) {
       if (!still) { S.askedIds.add(S.asking.id); S.spoken.add(S.asking.id); hideAsk(); }
       return;
     }
-    if (n && n.d < 300 && !S.askedIds.has(n.id) && S.moved - S.lastSpokeAt > 300) showAsk(n);
+    // S.accepting：正在為剛答應的景點找路，這時候不要問下一個
+    if (!S.accepting && n && n.d < 300 && !S.askedIds.has(n.id)
+        && S.moved - S.lastSpokeAt > 300) showAsk(n);
     return;
   }
 

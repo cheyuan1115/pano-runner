@@ -31,7 +31,7 @@
 <div id="attr">影像 © Google 街景服務</div>
 
 <!-- 景點導覽：照片在右上（雙層交叉淡入），字幕在底部 -->
-<div id="lm-photo"><div></div><div></div></div>
+<div id="lm-photo"><img alt=""><img alt=""></div>
 <div id="lm-ask"></div>
 <div id="lm-bar">
   <div id="lm-name"></div>
@@ -45,17 +45,22 @@
      全景照裁掉將近一半，那就是「照片異常」的原因。 */
   /* 寬高由 JS 依照片的實際比例算好再設 —— CSS 的 aspect-ratio 配上 max-height
      不會如預期縮放（實測比例設成 2.52 但框仍維持 1.46）。
-     維基的照片比例從 1.33 到 2.52 都有，固定框會把全景照裁掉近一半。 */
+     維基的照片比例從 1.33 到 2.52 都有，固定框會把全景照裁掉近一半。
+
+     **底色一定要透明。** 先前是 #14161a，於是照片一載不到就變成一塊黑板 ——
+     那正是「圖是黑的」看到的東西。透明的話載不到就只是看不見。 */
   #lm-photo { position: fixed; right: 16px; top: 16px; width: 676px; height: 450px;
               border-radius: 14px; overflow: hidden;
               z-index: 7; opacity: 0;
               transition: opacity .5s, width .35s, height .35s;
               box-shadow: 0 10px 40px rgba(0,0,0,.6); pointer-events: none;
-              background: #14161a; }
+              background: transparent; }
   #lm-photo.on { opacity: 1; }
-  #lm-photo > div { position: absolute; inset: 0; background-size: cover;
-                    background-position: center; opacity: 0; transition: opacity .7s; }
-  #lm-photo > div.on { opacity: 1; }
+  /* 用真正的 <img>，不用 background-image。差別是 <img> 只會發一次請求、
+     不需要 CORS、也沒有 blob 網址被回收的問題。 */
+  #lm-photo > img { position: absolute; inset: 0; width: 100%; height: 100%;
+                    object-fit: cover; opacity: 0; transition: opacity .7s; }
+  #lm-photo > img.on { opacity: 1; }
   /* 詢問橫幅。放在畫面中央偏上，跑步時一眼看得到。 */
   #lm-ask { position: fixed; left: 50%; top: 12%; transform: translateX(-50%);
             z-index: 8; display: none; text-align: center; pointer-events: none;
