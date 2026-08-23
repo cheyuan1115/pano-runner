@@ -8,7 +8,7 @@
 // 沒有 Chrome、沒有 CDP、沒有專用 profile。這支停掉就什麼都不剩。
 
 import { createServer } from 'node:http';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findPano, panoMeta } from './pano.mjs';
@@ -36,6 +36,7 @@ try {
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
 // 照片快取放本機。維基會限流，抓過的就不要再抓。
 const PHOTO_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.photocache');
+const VLOG = join(fileURLToPath(new URL('.', import.meta.url)), '.voicelog');
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/140.0 Safari/537.36';
 const PORT = 8877;
@@ -177,6 +178,19 @@ createServer(async (req, res) => {
         }
       }
       return json(res, { error: '附近找不到地面街景', tried: seen.size }, 404);
+    }
+    // 語音黑盒子。辨識這一段沒辦法從我這邊重現（我沒有辦法對麥克風講話），
+    // 所以讓瀏覽器把每個事件送回來記著，才有辦法分辨是
+    // 「麥克風沒進來」「聽到了但比對不中」還是「被自己的旁白吃掉」。
+    if (u.pathname === '/api/vlog' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 8000) break; }
+      const t = new Date().toTimeString().slice(0, 8);
+      let line = body;
+      try { const o = JSON.parse(body); line = o.ev + '　' + JSON.stringify(o).slice(0, 400); } catch {}
+      await appendFile(VLOG, `${t} ${line}\n`).catch(() => {});
+      console.log(`🗣 ${t} ${line}`);
+      res.writeHead(204); return res.end();
     }
     if (u.pathname === '/api/meta') {
       const m = await panoMeta(u.searchParams.get('pano'));

@@ -61,6 +61,18 @@
   V.feed = t => { const c = parse(t); note(t, c); if (c) fire(c, t); return c; };
   let rec = null, gen = 0, starting = false, lastCmd = null, lastAt = 0;
 
+  // 把事件送回伺服器。辨識這一段在開發機上重現不了（沒辦法對麥克風講話），
+  // 出問題時只有這份紀錄能分辨是哪一段壞掉。失敗就算了，絕不能影響辨識。
+  const vlog = (ev, extra) => {
+    try {
+      fetch('/api/vlog', { method: 'POST', keepalive: true,
+        body: JSON.stringify({ ev, on: V.on, err: V.error, heard: V.heard,
+          drop: V.dropped, self: V.selfHeard, paused: !!V.paused,
+          spk: !!window.__speaking, ...extra }) }).catch(() => {});
+    } catch {}
+  };
+  V.vlog = vlog;
+
   const note = (text, cmd) => {
     V.log.unshift({ t: Date.now(), text, cmd: cmd || null });
     if (V.log.length > 12) V.log.pop();
@@ -94,7 +106,7 @@
     r.interimResults = true;
     r.maxAlternatives = 4;
     const live = () => myGen === gen;
-    r.onstart = () => { if (live()) { V.on = true; V.alive = Date.now(); } };
+    r.onstart = () => { if (live()) { V.on = true; V.alive = Date.now(); vlog('起來了'); } };
     r.onaudiostart = () => { if (live()) V.alive = Date.now(); };
     r.onsoundstart = () => { if (live()) V.alive = Date.now(); };
     r.onspeechstart = () => { if (live()) V.alive = Date.now(); };
@@ -106,18 +118,16 @@
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') V.blocked = true;
       // no-speech / aborted / no-match 在一句一段落的模式下是常態，不要當成故障
       if (e.error === 'no-speech' || e.error === 'aborted' || e.error === 'no-match') V.error = null;
+      vlog('錯誤', { code: e.error });
     };
     r.onresult = e => {
       if (!live()) return;
       V.alive = Date.now();
-      // 播報中收到的都是自己的旁白。整段丟掉並立刻重來，
-      // 不要讓一長串旁白把辨識段落佔住 —— 那正是「說了指令沒反應」的成因。
-      if (window.__speaking) {
-        V.selfHeard = (V.selfHeard || 0) + 1;
-        try { rec.onend = null; rec.abort(); } catch {}
-        setTimeout(start, 200);
-        return;
-      }
+      // 播報中收到的都是自己的旁白，直接忽略。
+      // 這裡**不要** abort 重啟 —— 一段旁白會連續丟出幾十個 interim，
+      // 每個都重啟一次等於把辨識器打死。整段的暫停交給下面的監看器做，
+      // 一段只 abort 一次。
+      if (window.__speaking) { V.selfHeard = (V.selfHeard || 0) + 1; return; }
       // 講太長就當場中止，不要等他講完 —— 段落被佔住的時候後面的指令全部收不到
       const cur = e.results[e.results.length - 1];
       if (cur && !parse(cur[0].transcript)
@@ -138,7 +148,7 @@
           if (cmd) { hit = cmd; shown = t; break; }
         }
         // 只記 final，interim 會把同一句重送十幾次，記了看不出東西
-        if (res.isFinal) note(shown, hit);
+        if (res.isFinal) { note(shown, hit); vlog('聽到', { text: shown, cmd: hit }); }
         if (hit) fire(hit, shown);
       }
     };
@@ -166,18 +176,51 @@
       V.alive = Date.now();
     } catch (e) {
       V.error = String(e && e.message || e);
+      vlog('start 丟例外', { msg: V.error });
       setTimeout(() => { starting = false; start(); }, 1200);
       return;
     }
     setTimeout(() => { starting = false; }, 500);
   };
 
+  // 播報期間把辨識器整個停掉，播完再起一次。
+  // 只在狀態**改變**的那一刻動作，所以一段導覽最多一次 abort、一次 start。
+  let wasSpeaking = false, pausedAt = 0;
+  setInterval(() => {
+    const sp = !!window.__speaking;
+    // 保險：一段導覽最長也就兩三分鐘。暫停超過五分鐘一定是旗標漏放了，
+    // 硬是恢復 —— 寧可多聽到一點旁白，也不要語音整個死掉而畫面上看不出來。
+    if (sp && pausedAt && Date.now() - pausedAt > 300000) {
+      window.__speaking = false; vlog('暫停太久，強制恢復');
+      wasSpeaking = false; pausedAt = 0; V.paused = false; start();
+      return;
+    }
+    if (sp === wasSpeaking) return;
+    wasSpeaking = sp;
+    if (sp) {
+      V.paused = true;
+      try { if (rec) { rec.onend = null; rec.onerror = null; rec.abort(); } } catch {}
+      V.on = false;
+      pausedAt = Date.now();
+      vlog('播報中，暫停');
+    } else {
+      V.paused = false;
+      pausedAt = 0;
+      V.alive = Date.now();
+      vlog('播報結束，恢復');
+      start();
+    }
+  }, 300);
+
   // 看門狗：只在「我們認為它沒在跑」的時候補一腳。
   // 先前不管 on 是 true 還是 false 都 abort 重來，等於好好的辨識器被打斷。
   setInterval(() => {
-    if (V.blocked || starting) return;
+    if (V.blocked || starting || V.paused) return;
     if (!V.on && Date.now() - V.alive > 6000) start();
   }, 3000);
 
+  vlog('voice.js 載入');
   start();
+  // 每十五秒回報一次狀態，就算完全沒聲音也看得出辨識器活著沒
+  setInterval(() => vlog('心跳', { last: V.last ? V.last.slice(0, 24) : '' }), 15000);
 })();
