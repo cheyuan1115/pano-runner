@@ -1163,6 +1163,16 @@ function speak(lm) {
   draw();
 }
 
+// window.__speaking 現在真的會擋掉語音指令，所以它絕對不能卡在 true ——
+// 卡住的話語音會安靜地整個失效，而畫面上看不出任何異狀。
+// 播報結束後留 800 ms 讓喇叭的尾音散掉，超過兩秒還沒放掉就是漏了，強制清掉。
+setInterval(() => {
+  if (window.__speaking && !S.speaking) {
+    if (!S.speakOffAt) S.speakOffAt = Date.now();
+    else if (Date.now() - S.speakOffAt > 2000) { window.__speaking = false; S.speakOffAt = 0; }
+  } else S.speakOffAt = 0;
+}, 500);
+
 // 播報結束後把視角平順轉回行進方向，不要瞬間彈回去
 setInterval(() => {
   if (S.watchLm || !S.running) return;
@@ -1434,6 +1444,7 @@ function voiceState() {
   if (v.on) {
     const l = v.log && v.log[0];
     return '聽著' + (v.heard ? ' ×' + v.heard : '') + (v.dropped ? ' 丟' + v.dropped : '')
+      + (v.selfHeard ? ' 自語' + v.selfHeard : '')
       + (l ? `　「${l.text}」${l.cmd ? '→' + l.cmd : '（沒對上）'}` : '');
   }
   return v.error ? '重連中(' + v.error + ')' : '重連中';

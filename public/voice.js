@@ -23,11 +23,13 @@
   const WORDS = {
     // 後面那幾個是辨識常見的同音誤判 —— zh-TW 對單音節特別不準，
     // 「右」很容易變成「又／有／佑」，「轉」變成「磚／專／賺」。
-    left:  ['左', '左轉', '向左', '往左', '左邊',
+    // 「往左」和「左邊」原本都有，但合起來的「往左邊」沒有 —— 而那是最自然的說法。
+    // 比對是完全相等，差一個字就整個不中。
+    left:  ['左', '左轉', '向左', '往左', '左邊', '往左邊', '向左邊', '左手邊',
             '作轉', '做轉', '坐轉', '左磚', '左專'],
-    right: ['右', '右轉', '向右', '往右', '右邊',
+    right: ['右', '右轉', '向右', '往右', '右邊', '往右邊', '向右邊', '右手邊',
             '又轉', '有轉', '佑轉', '右磚', '右專', '又賺', '右賺'],
-    back:  ['回頭', '掉頭', '迴轉', '回轉', '往回', '後轉',
+    back:  ['回頭', '掉頭', '迴轉', '回轉', '往回', '後轉', '往回跑', '回去',
             '迴頭', '回投', '會頭', '掉頭髮'],
     // 結束一律用兩個字以上的完整說法。單一個「停」太容易誤觸 ——
     // street-runner 上實測過含「停」的句子讓整趟直接結束。
@@ -36,7 +38,8 @@
     stop:  ['結束跑步', '結束', '跑完'],
     // 「導覽」兩個字辨識率高、也不容易在一般句子裡單獨出現。
     // 不接受就不用說話 —— 完全避開「是／好」這種單音節在跑步機上的誤判。
-    guide: ['導覽', '要導覽', '介紹', '要介紹', '導遊', '倒覽', '道覽'],
+    guide: ['導覽', '要導覽', '介紹', '要介紹', '導遊', '倒覽', '道覽',
+            '導覽吧', '過去看看', '去看看'],
   };
   // 指令最長就這麼長。超過表示那是一般說話（或電視、旁人講話），
   // 不但不可能命中，還會把辨識段落一直佔住 —— 直接判定不是指令、當場重來。
@@ -51,7 +54,11 @@
     return null;
   };
 
-  const V = window.__voice = { on: false, heard: 0, dropped: 0, last: '', log: [], alive: 0, error: null };
+  const V = window.__voice = { on: false, heard: 0, dropped: 0, selfHeard: 0,
+                               last: '', log: [], alive: 0, error: null };
+  // 給測試與除錯用：直接餵一句話進來，走跟真的辨識完全相同的比對與觸發路徑。
+  // 沒有這個就只能對著麥克風念，改一次詞表要重跑一次跑步機。
+  V.feed = t => { const c = parse(t); note(t, c); if (c) fire(c, t); return c; };
   let rec = null, gen = 0, starting = false, lastCmd = null, lastAt = 0;
 
   const note = (text, cmd) => {
@@ -61,6 +68,11 @@
   };
 
   const fire = (cmd, text) => {
+    // 播報導覽的時候，麥克風收到的是自己的喇叭聲。旁白裡出現「介紹」「右」
+    // 這種字很常見，照收的話會被自己的旁白指揮。
+    // （view.js 一直有設 window.__speaking，但先前沒有任何地方讀它，
+    //   等於這道防護從來沒生效過。）
+    if (window.__speaking) { V.selfHeard = (V.selfHeard || 0) + 1; return; }
     // 同一個指令兩秒內只算一次 —— interim 會把同一句重送很多遍
     if (cmd === lastCmd && Date.now() - lastAt < 2000) return;
     lastCmd = cmd; lastAt = Date.now();
@@ -98,6 +110,14 @@
     r.onresult = e => {
       if (!live()) return;
       V.alive = Date.now();
+      // 播報中收到的都是自己的旁白。整段丟掉並立刻重來，
+      // 不要讓一長串旁白把辨識段落佔住 —— 那正是「說了指令沒反應」的成因。
+      if (window.__speaking) {
+        V.selfHeard = (V.selfHeard || 0) + 1;
+        try { rec.onend = null; rec.abort(); } catch {}
+        setTimeout(start, 200);
+        return;
+      }
       // 講太長就當場中止，不要等他講完 —— 段落被佔住的時候後面的指令全部收不到
       const cur = e.results[e.results.length - 1];
       if (cur && !parse(cur[0].transcript)
