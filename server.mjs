@@ -8,7 +8,7 @@
 // 沒有 Chrome、沒有 CDP、沒有專用 profile。這支停掉就什麼都不剩。
 
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findPano, panoMeta } from './pano.mjs';
@@ -34,6 +34,10 @@ try {
 } catch { console.log('沒有景點資料，地圖上不會顯示'); }
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
+// 照片快取放本機。維基會限流，抓過的就不要再抓。
+const PHOTO_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.photocache');
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+  + '(KHTML, like Gecko) Chrome/140.0 Safari/537.36';
 const PORT = 8877;
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
                 '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8' };
@@ -90,13 +94,43 @@ createServer(async (req, res) => {
             ...l,
             audio: `/audio/${encodeURIComponent(l.city)}/${encodeURIComponent(l.id)}.mp3`,
             lines: a.lines || [], marks: a.marks || [],
+            // 走自家的 /photo：同源（可以 fetch 成 blob）、而且抓過就快取。
             // width 降到 1200 —— 畫面最多顯示 900px 寬，原本的 1600 會拿到
             // 1920px、每張 300–750 KB，跟街景磚塊搶頻寬
-            photos: (PHOTOS[l.id] || []).slice(0, 6)
-              .map(p => (p.url || '').replace(/width=\d+/, 'width=1200')).filter(Boolean),
+            photos: (PHOTOS[l.id] || []).slice(0, 5)
+              .map(p => (p.url || '').replace(/width=\d+/, 'width=1200')).filter(Boolean)
+              .map(url => '/photo?u=' + encodeURIComponent(url)),
           };
         });
       return json(res, { items: hit });
+    }
+    // 景點照片轉一手。三個理由，缺一不可：
+    //   1. commons.wikimedia.org **沒有開 CORS**（實測回應裡沒有
+    //      access-control-allow-origin），所以瀏覽器不能用 fetch 抓成 blob。
+    //   2. 直接把網址設成 background-image 可以顯示（那條路徑不受 CORS 限制），
+    //      但若先用 new Image() 預載就變成**兩次**請求，第二次常被 429 擋掉 ——
+    //      症狀是照片一片黑、而且一直閃。
+    //   3. 存到本機之後同一張不會再抓第二次，429 從此絕跡。
+    if (u.pathname === '/photo') {
+      const src = u.searchParams.get('u') || '';
+      if (!/^https:\/\/(commons|upload)\.wikimedia\.org\//.test(src))
+        return json(res, { error: '只轉維基共享資源' }, 400);
+      const key = Buffer.from(src).toString('base64url').slice(-120);
+      const f = join(PHOTO_DIR, key + '.jpg');
+      const send = body => {
+        res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=604800' });
+        res.end(body);
+      };
+      try { return send(await readFile(f)); } catch {}
+      try {
+        const r = await fetch(src, { headers: { 'User-Agent': UA }, redirect: 'follow',
+                                     signal: AbortSignal.timeout(20000) });
+        if (!r.ok) return json(res, { error: '抓不到照片 ' + r.status }, 502);
+        const buf = Buffer.from(await r.arrayBuffer());
+        await mkdir(PHOTO_DIR, { recursive: true });
+        await writeFile(f, buf).catch(() => {});
+        return send(buf);
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
     }
     // 導覽音檔。優先給本機那份（快、離線也能用），沒有才轉到 CDN。
     if (u.pathname.startsWith('/audio/')) {

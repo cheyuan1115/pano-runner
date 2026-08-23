@@ -1035,6 +1035,8 @@ function chime() {
 }
 
 const $ = id => document.getElementById(id);
+// 照片的 blob 網址快取。同一段導覽會輪播同幾張，重看不要再抓一次。
+const photoCache = new Map();
 
 function speak(lm) {
   S.spoken.add(lm.id);
@@ -1057,35 +1059,52 @@ function speak(lm) {
   $('lm-text').textContent = (lm.lines && lm.lines[0]) || '';
   bar.classList.add('on');
 
-  // 先預載再顯示 —— 直接換 background-image 會先黑一下才跳出圖。
-  // 載失敗（維基共享資源會 429）就跳下一張，不要卡在原地。
-  const showPhoto = (k, tries = 0) => {
+  // 照片用 blob 載入，只發一次網路請求。
+  // 先前是 new Image() 預載成功後才把網址設成 background-image —— 那是**兩次**請求，
+  // 第二次常常被維基共享資源的 429 擋掉，於是圖顯示不出來、只剩容器的深色底，
+  // 而失敗又立刻跳下一張，所以畫面會一直閃。
+  const showPhoto = async (k, tries = 0) => {
     const ph = lm.photos || [];
-    if (!ph.length || tries >= ph.length) return;
+    if (!ph.length || tries >= ph.length || !mine()) return;
     const url = ph[k % ph.length];
+    let obj = photoCache.get(url);
+    if (!obj) {
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+        if (!r.ok) throw new Error(r.status);
+        obj = URL.createObjectURL(await r.blob());
+        photoCache.set(url, obj);
+        if (photoCache.size > 24) {
+          const old = photoCache.keys().next().value;
+          URL.revokeObjectURL(photoCache.get(old)); photoCache.delete(old);
+        }
+      } catch {
+        // 失敗就等一下再跳下一張，不要立刻連鎖 —— 連鎖就是「一直閃」
+        setTimeout(() => showPhoto(k + 1, tries + 1), 700);
+        return;
+      }
+    }
+    if (!mine()) return;
     const img = new Image();
     img.onload = () => {
-      if (!mine()) return;                     // 已經換下一段了，這張是舊的
-      // 框的寬高依照片的實際比例算，並夾在畫面的上限內。
-      // 維基的照片比例從 1.33 到 2.52 都有 —— 固定框配 cover 會把全景照裁掉近一半。
-      if (img.naturalWidth && img.naturalHeight) {
-        const ar = img.naturalWidth / img.naturalHeight;
-        const maxW = Math.min(900, innerWidth * 0.46);
-        const maxH = innerHeight * 0.6;
-        let w = maxW, h = w / ar;
-        if (h > maxH) { h = maxH; w = h * ar; }
-        pv.style.width = Math.round(w) + 'px';
-        pv.style.height = Math.round(h) + 'px';
-      }
+      if (!mine()) return;
+      // 框的寬高依照片的實際比例算，並夾在畫面的上限內
+      const ar = img.naturalWidth / img.naturalHeight;
+      const maxW = Math.min(900, innerWidth * 0.46);
+      const maxH = innerHeight * 0.6;
+      let w = maxW, h = w / ar;
+      if (h > maxH) { h = maxH; w = h * ar; }
+      pv.style.width = Math.round(w) + 'px';
+      pv.style.height = Math.round(h) + 'px';
       const next = layers[cur ^ 1];
-      next.style.backgroundImage = `url("${url}")`;
+      next.style.backgroundImage = `url("${obj}")`;
       next.classList.remove('on'); void next.offsetWidth; next.classList.add('on');
       layers[cur].classList.remove('on');
       cur ^= 1;
       pv.classList.add('on');
     };
-    img.onerror = () => { if (mine()) showPhoto(k + 1, tries + 1); };
-    img.src = url;
+    img.onerror = () => { if (mine()) setTimeout(() => showPhoto(k + 1, tries + 1), 700); };
+    img.src = obj;
   };
 
   setTimeout(() => {
