@@ -230,6 +230,12 @@ const S = {
   // 依序要跑到的目標點。到 60 公尺內就算到達，換下一個。
   // 景點導覽
   narrate: true,                        // 開關
+  // 詢問模式：到景點附近先問「要不要導覽」，說「導覽」才跑過去介紹。
+  // 不說話就是不要 —— 完全不需要辨識「是」這種單音節（那在跑步機上最不準）。
+  askMode: true,
+  asking: null,                         // 正在問的景點
+  askedIds: new Set(),                  // 問過的不再問
+  detourFrom: null,                     // 為了看景點而繞路前，原本的目標
   spoken: new Set(),                    // 播過的不再播
   lastSpokeAt: -9999,                   // 上次播報時跑了多遠
   nearbyAt: -9999, nearby: [],          // 附近景點快取
@@ -547,9 +553,13 @@ function micSpeed() {
 
 function pickLink(meta, dir, wish) {
   if (!meta.links.length) return null;
-  // 有目標時，行進方向改成「朝目標」，但仍然只從實際的連結裡挑
-  if (S.target && !wish) dir = bearingTo(meta, S.target);
+  // 「不要往回走」一定要用實際行進方向（傳進來的 dir），不是目標方位。
+  // 用目標方位的話，一旦目標在側面，來路就不會被濾掉 —— 會在兩顆全景之間
+  // 來回震盪（實測 200 步只前進 318 公尺）。離線模擬顯示修好之後，
+  // 走得到的景點從 3/12 變成 6/12。
   const back = (dir + 180) % 360;
+  // 有目標時只改「往哪個方向挑」，不改「哪些算往回」
+  const aim = (S.target && !wish) ? bearingTo(meta, S.target) : dir;
   // 不要往回走 —— 只留跟來向夾角大於 60° 的連結
   const fwd = meta.links.filter(l => Math.abs(ad(l.heading, back)) > 60);
   const cand = fwd.length ? fwd : meta.links;
@@ -560,11 +570,11 @@ function pickLink(meta, dir, wish) {
     // 取最接近正側面的那一條；這個路口沒有那一側的路就回 null，
     // 呼叫端會改走直行並把意圖留著，等下一個路口
     if (!side.length) return null;
-    const aim = dir + sign * 90;
+    const side90 = dir + sign * 90;
     return side.reduce((a, b) =>
-      Math.abs(ad(b.heading, aim)) < Math.abs(ad(a.heading, aim)) ? b : a);
+      Math.abs(ad(b.heading, side90)) < Math.abs(ad(a.heading, side90)) ? b : a);
   }
-  return cand.reduce((a, b) => Math.abs(ad(b.heading, dir)) < Math.abs(ad(a.heading, dir)) ? b : a);
+  return cand.reduce((a, b) => Math.abs(ad(b.heading, aim)) < Math.abs(ad(a.heading, aim)) ? b : a);
 }
 
 // 預抓佇列。深度 2 —— 只預抓一顆的話，遇到巴黎那種密集街區會剛好打平：
@@ -1068,12 +1078,52 @@ function refreshNext(meta) {
   return next;
 }
 
+// 詢問橫幅
+function showAsk(lm) {
+  S.asking = lm;
+  const el = $('lm-ask');
+  el.innerHTML = `<div class="t1">即將經過 ${lm.name}</div>`
+    + '<div class="t2">說「導覽」就跑過去介紹</div>'
+    + '<div class="t3">不用回答，繼續跑就好</div>';
+  el.classList.add('on');
+}
+function hideAsk() { S.asking = null; $('lm-ask').classList.remove('on'); }
+
+// 接受導覽：把景點設成目前的目標，原本的目標記著，看完再回去
+async function acceptGuide() {
+  const lm = S.asking;
+  if (!lm) return false;
+  hideAsk();
+  S.detourFrom = S.target;
+  // 先吸到景點最近的街景點再當目標。景點座標是建築中心（羅浮宮那顆在中庭裡），
+  // 直接拿它當目標的話會一直靠近卻進不去 —— 實測繞了 400 公尺還差 190 公尺。
+  // 啟動器選景點時有做這件事，繞路時也要做。
+  let t = { lat: lm.lat, lng: lm.lng, lm };
+  S.note = `⌖ 找 ${lm.name} 的路…`; draw();
+  try {
+    const r = await (await fetch(`/api/find?ll=${lm.lat},${lm.lng}&r=60`,
+      { signal: AbortSignal.timeout(8000) })).json();
+    if (r.lat) t = { lat: r.lat, lng: r.lng, lm };
+  } catch {}
+  S.target = t;
+  S.bestToTarget = Infinity; S.targetSetAt = S.moved; S.bestAt = S.moved;
+  S.note = `⌖ 往 ${lm.name} 去`;
+  dropQueue(); fillQueue(); draw();
+  return true;
+}
+
+// 繞路結束（到了或到不了）—— 回到原本的目標
+function endDetour() {
+  S.target = S.detourFrom;
+  S.detourFrom = null;
+  S.bestToTarget = Infinity; S.targetSetAt = S.moved; S.bestAt = S.moved;
+  dropQueue(); fillQueue();
+}
+
 async function maybeNarrate(meta) {
-  if (!S.narrate) { S.nextLm = null; return; }
-  refreshNext(meta);
-  if (S.speaking) return;
-  if (S.moved - S.lastSpokeAt < 400) return;          // 最小間隔
-  // 每跑 150 公尺重新查一次附近景點
+  if (!S.narrate) { S.nextLm = null; hideAsk(); return; }
+  // 附近景點的查詢一定要在最前面。先前放在 askMode 的 return 之後 ——
+  // 詢問模式下永遠不會執行到，S.nearby 一直是空的，所以從來不會問。
   if (S.moved - S.nearbyAt > 150) {
     S.nearbyAt = S.moved;
     try {
@@ -1082,6 +1132,39 @@ async function maybeNarrate(meta) {
       S.nearby = (await r.json()).items || [];
     } catch { S.nearby = []; }
   }
+  refreshNext(meta);
+  if (S.speaking) return;
+
+  // 繞路中：到了就播報。判斷依據是「目前的目標帶著 lm」，
+  // 不能用 detourFrom（它初始就是 null，!== undefined 永遠成立）。
+  if (S.target && S.target.lm) {
+    const lm = S.target.lm;
+    const d = distM(meta, S.target);
+    if (d < 90) { endDetour(); speak(lm); return; }
+    // 繞路放寬到 600 公尺沒進步才放棄 —— 景點常常要繞過街廓才到得了
+    if (S.moved - S.bestAt > 600) {
+      S.note = `⌖ ${lm.name} 過不去，繼續跑`;
+      endDetour();
+    }
+    return;
+  }
+
+  if (S.askMode) {
+    // 前方 300 公尺內、還沒問過的就問。300 公尺在 14 km/h 下約 77 秒，
+    // 夠你反應，也夠繞過去。
+    const n = S.nextLm;
+    if (S.asking) {
+      // 已經在問了：跑過去或太遠就收起來，並記成問過了
+      const still = n && n.id === S.asking.id && n.d < 320
+        && Math.abs(ad(bearingTo(meta, S.asking), S.travelDir)) < 80;
+      if (!still) { S.askedIds.add(S.asking.id); S.spoken.add(S.asking.id); hideAsk(); }
+      return;
+    }
+    if (n && n.d < 300 && !S.askedIds.has(n.id) && S.moved - S.lastSpokeAt > 300) showAsk(n);
+    return;
+  }
+
+  if (S.moved - S.lastSpokeAt < 400) return;          // 最小間隔
   // 順便找出「前方最近、還沒播過」的那一個，給 HUD 顯示距離
   let next = null;
   for (const lm of S.nearby) {
@@ -1111,6 +1194,9 @@ const bearingTo = (a, b) => {
 // 抵達判定與換下一個目標。60 公尺是街景節點的間距量級，再嚴格就永遠到不了。
 function checkTarget(meta) {
   if (!S.target) return;
+  // 為了看景點而繞路的目標不是路線上的點 —— 交給 maybeNarrate 處理，
+  // 不然會被當成「到了第 N 點」而吃掉一個真正的路線點。
+  if (S.target.lm) return;
   const now = distM(meta, S.target);
   if (now < 60) {
     S.note = `⌖ 到了第 ${S.targetNo} 點（${(S.moved / 1000).toFixed(2)} km）`;
@@ -1186,6 +1272,12 @@ async function lateralHop(side) {
 
 // 轉向指令。語音（voice.js）和鍵盤共用這一個入口。
 window.__turn = (cmd, text) => {
+  if (cmd === 'guide') {
+    acceptGuide().then(ok => {
+      if (!ok) { S.note = '（現在沒有可以導覽的景點）'; draw(); }
+    });
+    return;
+  }
   if (cmd === 'stop') { finishRun(text); return; }
   S.turnSeq++;
   if (cmd === 'back') {
@@ -1345,9 +1437,12 @@ addEventListener('keydown', e => {
   }
   else if (e.key === 's') { exportGPX(); return; }
   else if (e.key === 'e') { finishRun(); return; }
+  else if (e.key === 'g') { window.__turn('guide'); return; }   // 鍵盤版的「導覽」
+  else if (e.key === 'N') { S.askMode = !S.askMode; S.note = S.askMode ? '❓ 詢問模式' : '🔊 自動播報'; }
   else if (e.key === 'n') {                            // 導覽開關
     S.narrate = !S.narrate;
     if (!S.narrate) {
+      hideAsk();
       S.sayToken = (S.sayToken || 0) + 1;      // 讓進行中那段的收尾失效
       try { if (audioEl) audioEl.pause(); } catch {}
       S.speaking = false; window.__speaking = false;
@@ -1416,6 +1511,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   }
   if (q.has('bottom')) S.bottomDeg = +q.get('bottom');
   if (q.get('narrate') === '0') S.narrate = false;
+  if (q.get('ask') === '0') S.askMode = false;
   if (q.get('targets')) {
     S.targets = q.get('targets').split('|').map(t => {
       const [la, ln] = t.split(',').map(Number);

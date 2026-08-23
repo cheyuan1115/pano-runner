@@ -32,6 +32,7 @@
 
 <!-- 景點導覽：照片在右上（雙層交叉淡入），字幕在底部 -->
 <div id="lm-photo"><div></div><div></div></div>
+<div id="lm-ask"></div>
 <div id="lm-bar">
   <div id="lm-name"></div>
   <div id="lm-text"></div>
@@ -47,6 +48,16 @@
   #lm-photo > div { position: absolute; inset: 0; background-size: cover;
                     background-position: center; opacity: 0; transition: opacity .7s; }
   #lm-photo > div.on { opacity: 1; }
+  /* 詢問橫幅。放在畫面中央偏上，跑步時一眼看得到。 */
+  #lm-ask { position: fixed; left: 50%; top: 12%; transform: translateX(-50%);
+            z-index: 8; display: none; text-align: center; pointer-events: none;
+            background: rgba(20,22,26,.9); border: 1px solid #3a3f47; border-radius: 14px;
+            padding: 16px 28px; backdrop-filter: blur(10px);
+            box-shadow: 0 8px 34px rgba(0,0,0,.6); }
+  #lm-ask.on { display: block; }
+  #lm-ask .t1 { font-size: 26px; color: #fff; font-weight: 500; letter-spacing: .5px; }
+  #lm-ask .t2 { font-size: 17px; color: #6fd08c; margin-top: 8px; letter-spacing: 1px; }
+  #lm-ask .t3 { font-size: 13px; color: #8a8f98; margin-top: 4px; }
   #lm-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 34px;
             width: min(1400px, 88vw); z-index: 7; text-align: center;
             opacity: 0; transition: opacity .4s; pointer-events: none; }
@@ -82,7 +93,9 @@ i　　　收合狀態欄
 ,　　　調整面板
 s　　　匯出這趟路線（GPX）
 e　　　結束跑步並存檔
-n　　　景點導覽開關（播報中視角會盯著景點）
+g　　　接受導覽（等同說「導覽」）
+n　　　景點導覽開關
+Shift+N　詢問模式 / 自動播報
 說「結束跑步」也可以
 h　　　總視野
 Shift+H　地平面模型
