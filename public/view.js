@@ -198,7 +198,7 @@ const S = {
   // 上緣離水平線幾度。跟下緣分開是因為兩邊的代價完全不同：
   // 往下多看到的是街景車的馬賽克（愈低愈糊），往上多看到的是天空和建築 ——
   // 後者不用付代價。所以要「垂直視角更大」，就是把上緣往上放，下緣不動。
-  topDeg: 55,
+  topDeg: 65,
   // 每片的水平視野。要「幾何正確」（畫面裡的角度＝眼睛看到的角度），
   // 這個值應該等於螢幕在你眼中的實際張角：2·atan(螢幕可視寬/2 ÷ 觀看距離)。
   // 設得比實際張角大＝廣角效果，看起來比較有速度感但比例被壓縮。
@@ -308,8 +308,30 @@ const panelW = () => cv.clientWidth / S.panels;
 let viewH = 0;
 // 投影面上，畫面上下緣對應的座標是 tan(上緣角)、−tan(下緣角)。
 // 半高與中心偏移由這兩個值決定；上下相等時偏移為 0。
-const vScale  = () => (Math.tan(rad(S.topDeg + S.pitch)) + Math.tan(rad(S.bottomDeg + S.pitch))) / 2;
-const vOffset = () => (Math.tan(rad(S.topDeg + S.pitch)) - Math.tan(rad(S.bottomDeg + S.pitch))) / 2;
+//
+// 重點在「視窗畫得下多少」。同樣的水平視野下，垂直能涵蓋多少度是被視窗的
+// 高寬比鎖死的 —— 要求超過那個上限時**不能**硬撐，否則會發生：
+// 畫面高度被夾在視窗高，位移卻繼續放大，等於整個視窗往上推、下緣被吃掉，
+// 總視野反而愈調愈小（實測上緣 63 度時實際 88 度，調到 80 度只剩 77 度，
+// 而 HUD 還宣稱 106 度）。所以超過上限就把上緣壓到剛好放得下。
+//
+// w、h 是裝置像素，sc 是這個水平視野對應的投影尺度。
+function vFit(w, h, sc) {
+  // tan 在 90 度會爆掉（正切變號 → 高度變負 → 畫面整個翻掉）
+  const cap = a => Math.max(-88, Math.min(88, a));
+  let tT = Math.tan(rad(cap(S.topDeg + S.pitch)));
+  let tB = Math.tan(rad(cap(S.bottomDeg + S.pitch)));
+  const maxHalf = h / w * sc;                 // 視窗用滿高度時的半高
+  if ((tT + tB) / 2 > maxHalf) tT = 2 * maxHalf - tB;   // 先壓上緣，下緣不動
+  if (tT < 0.05) tT = 0.05;                   // 上緣壓到底了還放不下
+  let half = (tT + tB) / 2;
+  if (half > maxHalf) { const k = maxHalf / half; tT *= k; tB *= k; half = maxHalf; }
+  return { tT, tB, half, off: (tT - tB) / 2,
+           topDeg: Math.atan(tT) * 180 / Math.PI, botDeg: Math.atan(tB) * 180 / Math.PI };
+}
+// HUD 要報「實際畫出來的」而不是「你設定的」—— 兩者不一致正是先前
+// 「調過就調不回去」的成因：數字在騙人，看著數字調只會愈調愈糟。
+let vEff = { topDeg: 0, botDeg: 0 };
 
 const hHalfDeg = () =>
   Math.atan(panelW() / (viewH || cv.clientHeight) * Math.tan(rad(S.fov / 2))) * 180 / Math.PI;
@@ -463,7 +485,9 @@ function drawInner() {
     // 上下緣不對稱：投影面上下緣的座標是 tan(上)、−tan(下)，
     // 於是半高 = (tan上 + tan下)/2，中心偏移 = (tan上 − tan下)/2。
     // 兩者相等時偏移為 0，退化成原本的對稱情形。
-    const need = Math.round(vScale() * w / sc);
+    const f = vFit(w, h, sc);
+    vEff = f;
+    const need = Math.round(f.half * w / sc);
     if (need <= h) { vh = need; y0 = Math.round((h - vh) / 2); }
   }
   if (S.fit && S.proj !== 'pan') {
@@ -482,9 +506,10 @@ function drawInner() {
     gl.uniform1f(U('uKx'), D < 0 ? hs : sc / (D + 1));
     const ky = sc * vh / pw;
     gl.uniform1f(U('uKy'), ky);
-    // 位移要跟著 uKy 一起縮 —— 視窗太矮時 vh 會被夾住，比例才不會跑掉
-    const half = vScale();
-    gl.uniform1f(U('uVsh'), half > 0 ? vOffset() * ky / half : 0);
+    // vFit 已經保證 half 放得下，所以 ky 就等於 half，位移直接用不必再縮
+    const f = vFit(pw, vh, sc);
+    vEff = f;
+    gl.uniform1f(U('uVsh'), f.off);
   }
   bcast();
   const tanHalf = Math.tan(rad(S.fov / 2));
@@ -525,7 +550,11 @@ function drawInner() {
     + `朝向 ${Math.round((S.heading % 360 + 360) % 360)}°   `
     + (S.proj === 'pan'
        ? `${S.paniniD < 0 ? '圓柱' : 'Panini d=' + S.paniniD.toFixed(1)} 水平 ${S.span}°　`
-         + `垂直 ${S.topDeg + S.bottomDeg}°（+${S.topDeg}／−${S.bottomDeg}）\n`
+         + `垂直 ${Math.round(vEff.topDeg + vEff.botDeg)}°`
+         + `（+${vEff.topDeg.toFixed(0)}／−${vEff.botDeg.toFixed(0)}）`
+         // 要求的跟畫得出來的不一樣時要講出來，不然看著數字調會愈調愈糟
+         + (Math.abs(vEff.topDeg - (S.topDeg + S.pitch)) > 1
+            ? `　⚠ 視窗只放得下這麼多（設 +${S.topDeg}）` : '') + '\n'
        : `垂直 ${S.fov.toFixed(0)}°（下緣 −${S.bottomDeg}°）/ 水平 `
          + `${Math.round(hHalfDeg() * 2)}° × ${S.panels} ＝ `
          + `${Math.round(hHalfDeg() * 2 * S.panels)}°${S.fit ? '　自動比例' : ''}\n`)
@@ -1588,7 +1617,7 @@ addEventListener('keydown', e => {
   }
   else if (e.key === 'f') S.bottomDeg = S.bottomDeg >= 34 ? 20 : S.bottomDeg + 3;
   // 上緣。往上看不會碰到馬賽克，所以可以放得比下緣寬得多
-  else if (e.key === 'v') { const L = [26, 35, 45, 55, 65];
+  else if (e.key === 'v') { const L = [26, 35, 45, 55, 65, 75];
     S.topDeg = L[(L.findIndex(x => x >= S.topDeg) + 1) % L.length]; }
   else if (e.key === 'b') S.fit = !S.fit;
   else if (e.key === 'h') {                       // 總視野循環
