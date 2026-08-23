@@ -12,6 +12,7 @@ import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findPano, panoMeta } from './pano.mjs';
+import { wikiNearby } from './wiki.mjs';
 
 // 景點資料沿用 run-world 那份（745 個，12 個城市，含導覽稿）。
 // 直接讀原檔而不是複製一份 —— 那邊修了座標這邊立刻同步。
@@ -37,6 +38,50 @@ const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
 // 照片快取放本機。維基會限流，抓過的就不要再抓。
 const PHOTO_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.photocache');
 const VLOG = join(fileURLToPath(new URL('.', import.meta.url)), '.voicelog');
+const WIKI_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.wikicache');
+
+// 維基查詢一趟要打六到八次 API，連著打一定 429（實測第二個城市就中）。
+// 所以一定要快取。用約 1.1 公里見方的格子當鍵 —— 跑步時位置一直在動，
+// 不切格子的話每走十公尺就是一次全新查詢。
+const cellKey = (lat, lng) => `${Math.round(lat * 90)}_${Math.round(lng * 90)}`;
+const wikiMem = new Map();
+const wikiBusy = new Map();
+
+// **絕對不能讓跑步等這個查詢。** 冷查一格要打六到八次維基 API，實測 10–22 秒，
+// 而畫面端的 /api/nearby 只等 6 秒 —— 直接逾時，景點一個都拿不到
+//（里斯本實測整趟零播報）。所以：有快取就給，沒有就回空並在背景抓，
+// 下一次呼叫（跑 150 公尺之後）就有了。
+async function wikiFetchCell(k, lat, lng) {
+  if (wikiBusy.has(k)) return wikiBusy.get(k);
+  const cLat = Math.round(lat * 90) / 90, cLng = Math.round(lng * 90) / 90;
+  const job = (async () => {
+    try {
+      const items = await wikiNearby(cLat, cLng, { radius: 1200, limit: 14 });
+      wikiMem.set(k, items);
+      await mkdir(WIKI_DIR, { recursive: true });
+      await writeFile(join(WIKI_DIR, k + '.json'), JSON.stringify({ at: Date.now(), items }))
+        .catch(() => {});
+      console.log(`維基 ${k}：${items.length} 個景點`);
+      return items;
+    } catch (e) { console.log('維基查詢失敗：' + (e.message || e)); return []; }
+    finally { setTimeout(() => wikiBusy.delete(k), 1000); }
+  })();
+  wikiBusy.set(k, job);
+  return job;
+}
+
+// wait = true 時會等（給地圖與預熱用，那裡不趕時間）
+async function wikiCell(lat, lng, wait = false) {
+  const k = cellKey(lat, lng);
+  if (wikiMem.has(k)) return wikiMem.get(k);
+  try {
+    const o = JSON.parse(await readFile(join(WIKI_DIR, k + '.json'), 'utf8'));
+    // 一個月內的就用。景點不會跑掉，瀏覽量變一點也無所謂。
+    if (Date.now() - o.at < 30 * 86400e3) { wikiMem.set(k, o.items); return o.items; }
+  } catch {}
+  const job = wikiFetchCell(k, lat, lng);
+  return wait ? job : [];
+}
 
 // commons.wikimedia.org/Special:FilePath/<檔名> → upload.wikimedia.org 的直連縮圖。
 // 那個路徑會 302 轉址而且限流很兇；直連的縮圖檔沒有這個問題。
@@ -105,6 +150,13 @@ createServer(async (req, res) => {
       const hit = LANDMARKS.filter(l => l.lat >= s0 && l.lat <= n0 && l.lng >= w0 && l.lng <= e0);
       // 太多就先給導覽稿較長的（當作知名度的代理指標）
       hit.sort((a, c) => c.len - a.len);
+      // 地圖上這一帶沒有人工景點時，補上維基的（只查中心那一格，
+      // 整個 bbox 逐格查會打爆維基）
+      if (hit.length < 3 && u.searchParams.get('wiki') !== '0') {
+        const w = await wikiCell((s0 + n0) / 2, (w0 + e0) / 2, true);
+        for (const x of w)
+          if (x.lat >= s0 && x.lat <= n0 && x.lng >= w0 && x.lng <= e0) hit.push(x);
+      }
       return json(res, { n: hit.length, items: hit.slice(0, 400) });
     }
     // 附近的景點（跑步時用），依距離排序，附上導覽稿長度與音檔路徑
@@ -113,13 +165,19 @@ createServer(async (req, res) => {
       const rad = Number(u.searchParams.get('r')) || 400;
       if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
       const R = 6371000, toRad = x => x * Math.PI / 180;
+      const dist2 = (a, b) => {
+        const dp = toRad(b.lat - a.lat), dl = toRad(b.lng - a.lng);
+        const h = Math.sin(dp / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dl / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(h));
+      };
       const d2 = l => {
         const dp = toRad(l.lat - lat), dl = toRad(l.lng - lng);
         const h = Math.sin(dp / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(l.lat)) * Math.sin(dl / 2) ** 2;
         return 2 * R * Math.asin(Math.sqrt(h));
       };
-      const hit = LANDMARKS.map(l => ({ ...l, d: d2(l) })).filter(l => l.d <= rad)
-        .sort((a, b) => a.d - b.d).slice(0, 12)
+      const near = LANDMARKS.map(l => ({ ...l, d: d2(l) })).filter(l => l.d <= rad)
+        .sort((a, b) => a.d - b.d).slice(0, 12);
+      const hit = near
         .map(l => {
           const a = AUDIDX[l.id] || {};
           return {
@@ -134,6 +192,21 @@ createServer(async (req, res) => {
               .map(url => '/photo?u=' + encodeURIComponent(url)),
           };
         });
+      // 人工資料只有 12 個城市。出了那幾個城市就整片空白 ——
+      // 這時候補上維基的景點（全世界都有，繁體中文）。
+      // 已經有三個以上人工景點就不補，那幾個城市的稿子比維基好念。
+      if (u.searchParams.get('wiki') !== '0' && near.length < 3) {
+        const w = (await wikiCell(lat, lng))
+          .map(x => ({ ...x, d: d2(x) })).filter(x => x.d <= rad)
+          // 跟人工景點太近的算同一個，不要重複播
+          .filter(x => !near.some(l => d2(l) < 9999 && dist2(l, x) < 90))
+          .sort((a, b) => a.d - b.d);
+        for (const x of w) {
+          if (hit.length >= 12) break;
+          hit.push({ ...x, audio: '', photos: (x.photos || [])
+            .map(url => '/photo?u=' + encodeURIComponent(url)) });
+        }
+      }
       return json(res, { items: hit });
     }
     // 景點照片轉一手。三個理由，缺一不可：
@@ -239,6 +312,18 @@ createServer(async (req, res) => {
       await appendFile(VLOG, `${t} ${line}\n`).catch(() => {});
       console.log(`🗣 ${t} ${line}`);
       res.writeHead(204); return res.end();
+    }
+    // 預熱：把一個點周圍九格的維基景點先抓好，跑步時就不會有空窗。
+    if (u.pathname === '/api/wikiwarm') {
+      const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
+      if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
+      const step = 1 / 90;
+      const out = [];
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        const items = await wikiCell(lat + i * step, lng + j * step, true);
+        out.push({ cell: `${i},${j}`, n: items.length });
+      }
+      return json(res, { cells: out, total: out.reduce((a, b) => a + b.n, 0) });
     }
     if (u.pathname === '/api/meta') {
       const m = await panoMeta(u.searchParams.get('pano'));

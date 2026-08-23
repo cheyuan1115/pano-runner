@@ -1067,7 +1067,7 @@ function preloadPhotos(lm) {
 }
 
 function preloadAudio(lm) {
-  if (!lm || preAudio.has(lm.id)) return;
+  if (!lm || !lm.audio || preAudio.has(lm.id)) return;
   const a = new Audio();
   a.preload = 'auto';
   a.src = lm.audio;
@@ -1168,6 +1168,48 @@ function speak(lm) {
     if (el.getAttribute('src') === url) { if (el.complete) el.onload(); return; }
     el.src = url;
   };
+
+  // 維基來的景點沒有音檔（只有 12 個城市有人工錄的），改用瀏覽器的語音合成。
+  // 一句一句念，字幕跟著換 —— 這樣不需要時間軸，也不會像整段念完才換字幕那樣脫節。
+  if (!lm.audio) {
+    setTimeout(() => {
+      if (!mine()) return;
+      const lines = (lm.lines && lm.lines.length) ? lm.lines : [lm.script || lm.name];
+      // 照片依總字數估時間輪播（實測 zh-TW 大約每秒五個字）
+      const secs = Math.max(8, lines.join('').length / 5);
+      photoTimer = setInterval(() => showPhoto(pi++),
+        Math.max(4000, secs * 1000 / Math.max(1, (lm.photos || []).length)));
+      let i = 0;
+      const next = () => {
+        if (!mine() || i >= lines.length) { finishSay(); return; }
+        $('lm-text').textContent = lines[i];
+        const u = new SpeechSynthesisUtterance(lines[i]);
+        u.lang = 'zh-TW'; u.rate = 1.0; u.volume = 0.95;
+        const zh = speechSynthesis.getVoices().find(v => /zh[-_]TW|zh[-_]Hant/i.test(v.lang));
+        if (zh) u.voice = zh;
+        u.onend = () => { i++; setTimeout(next, 120); };
+        // 合成失敗就別卡住 —— 沒有語音也要讓字幕跑完
+        u.onerror = () => { i++; setTimeout(next, 900); };
+        try { speechSynthesis.speak(u); }
+        catch { i++; setTimeout(next, 900); }
+      };
+      const finishSay = () => {
+        clearInterval(photoTimer); clearInterval(textTimer);
+        if (!mine()) return;
+        finished = true;
+        S.speaking = false; S.nowSpeaking = ''; S.watchLm = null;
+        bar.classList.remove('on'); pv.classList.remove('on');
+        setTimeout(() => { window.__speaking = false; }, 800);
+        draw();
+      };
+      try { speechSynthesis.cancel(); } catch {}
+      next();
+      // 保險：語音合成偶爾會靜靜地不觸發 onend，整段卡死
+      setTimeout(() => { if (mine() && !finished) finishSay(); }, (secs + 25) * 1000);
+    }, 550);
+    draw();
+    return;
+  }
 
   setTimeout(() => {
     if (!mine()) return;
