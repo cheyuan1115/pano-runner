@@ -36,6 +36,7 @@ uniform float uT, uR;         // 相機沿行進方向平移多少公尺、場�
 uniform float uPanoPos;       // 這顆全景在共用世界座標裡的位置（沿行進方向，公尺）
 uniform float uCyl;           // 0 = 多片直線透視／1 = Panini 連續投影
 uniform float uKx, uKy, uD;   // Panini：水平尺度、垂直尺度、鏡頭距離參數
+uniform float uVsh;           // 垂直位移：讓上緣可以拉得比下緣高（見 applyFov）
 uniform float uFadeA, uFadeB; // 底部淡出：從這個緯度開始，到這個緯度全暗（弧度）
 uniform float uCamH;          // 相機離地高度（公尺）。0 = 不用地平面模型
 uniform vec2 uBaseScale, uDetScale;
@@ -56,12 +57,12 @@ void main() {
     float lo, la;
     if (uD < 0.0) {
       lo = vUV.x * uKx;                       // uKx = 半視野（弧度）
-      la = atan(vUV.y * uKy);
+      la = atan(vUV.y * uKy + uVsh);
     } else {
       float k = vUV.x * uKx;
       lo = atan(k) + asin(clamp(k * uD / sqrt(1.0 + k * k), -1.0, 1.0));
       float sf = (uD + 1.0) / (uD + cos(lo));
-      la = atan(vUV.y * uKy / sf);
+      la = atan((vUV.y * uKy + uVsh) / sf);
     }
     d = vec3(sin(lo) * cos(la), sin(la), cos(lo) * cos(la));
   } else {
@@ -194,6 +195,10 @@ const S = {
   panelIdx: Q0.has('panel') ? +Q0.get('panel') : null,
   fit: true,
   bottomDeg: 26,                        // 畫面下緣離水平線幾度
+  // 上緣離水平線幾度。跟下緣分開是因為兩邊的代價完全不同：
+  // 往下多看到的是街景車的馬賽克（愈低愈糊），往上多看到的是天空和建築 ——
+  // 後者不用付代價。所以要「垂直視角更大」，就是把上緣往上放，下緣不動。
+  topDeg: 55,
   // 每片的水平視野。要「幾何正確」（畫面裡的角度＝眼睛看到的角度），
   // 這個值應該等於螢幕在你眼中的實際張角：2·atan(螢幕可視寬/2 ÷ 觀看距離)。
   // 設得比實際張角大＝廣角效果，看起來比較有速度感但比例被壓縮。
@@ -300,6 +305,11 @@ const panelW = () => cv.clientWidth / S.panels;
 // 繪製區的高度（開了自動比例時比畫布矮，上下是黑邊）。
 // 取磚塊範圍與 HUD 都要用這個，不然跟實際畫出來的不一致。
 let viewH = 0;
+// 投影面上，畫面上下緣對應的座標是 tan(上緣角)、−tan(下緣角)。
+// 半高與中心偏移由這兩個值決定；上下相等時偏移為 0。
+const vScale  = () => (Math.tan(rad(S.topDeg + S.pitch)) + Math.tan(rad(S.bottomDeg + S.pitch))) / 2;
+const vOffset = () => (Math.tan(rad(S.topDeg + S.pitch)) - Math.tan(rad(S.bottomDeg + S.pitch))) / 2;
+
 const hHalfDeg = () =>
   Math.atan(panelW() / (viewH || cv.clientHeight) * Math.tan(rad(S.fov / 2))) * 180 / Math.PI;
 
@@ -449,7 +459,10 @@ function drawInner() {
     // 中央的像素是方的，所以由「下緣要停在哪」反推高度。
     const hs = rad(S.span / 2), D = S.paniniD;
     const sc = D < 0 ? hs : Math.sin(hs) * (D + 1) / (D + Math.cos(hs));
-    const need = Math.round(Math.tan(rad(S.bottomDeg + S.pitch)) * w / sc);
+    // 上下緣不對稱：投影面上下緣的座標是 tan(上)、−tan(下)，
+    // 於是半高 = (tan上 + tan下)/2，中心偏移 = (tan上 − tan下)/2。
+    // 兩者相等時偏移為 0，退化成原本的對稱情形。
+    const need = Math.round(vScale() * w / sc);
     if (need <= h) { vh = need; y0 = Math.round((h - vh) / 2); }
   }
   if (S.fit && S.proj !== 'pan') {
@@ -466,7 +479,11 @@ function drawInner() {
     const hs = rad(S.span / 2), D = S.paniniD;
     const sc = D < 0 ? hs : Math.sin(hs) * (D + 1) / (D + Math.cos(hs));
     gl.uniform1f(U('uKx'), D < 0 ? hs : sc / (D + 1));
-    gl.uniform1f(U('uKy'), sc * vh / pw);
+    const ky = sc * vh / pw;
+    gl.uniform1f(U('uKy'), ky);
+    // 位移要跟著 uKy 一起縮 —— 視窗太矮時 vh 會被夾住，比例才不會跑掉
+    const half = vScale();
+    gl.uniform1f(U('uVsh'), half > 0 ? vOffset() * ky / half : 0);
   }
   bcast();
   const tanHalf = Math.tan(rad(S.fov / 2));
@@ -506,7 +523,8 @@ function drawInner() {
     + (indoorIds.size ? `　避開 ${indoorIds.size} 顆` : '') + '\n'
     + `朝向 ${Math.round((S.heading % 360 + 360) % 360)}°   `
     + (S.proj === 'pan'
-       ? `${S.paniniD < 0 ? '圓柱' : 'Panini d=' + S.paniniD.toFixed(1)} ${S.span}°\n`
+       ? `${S.paniniD < 0 ? '圓柱' : 'Panini d=' + S.paniniD.toFixed(1)} 水平 ${S.span}°　`
+         + `垂直 ${S.topDeg + S.bottomDeg}°（+${S.topDeg}／−${S.bottomDeg}）\n`
        : `垂直 ${S.fov.toFixed(0)}°（下緣 −${S.bottomDeg}°）/ 水平 `
          + `${Math.round(hHalfDeg() * 2)}° × ${S.panels} ＝ `
          + `${Math.round(hHalfDeg() * 2 * S.panels)}°${S.fit ? '　自動比例' : ''}\n`)
@@ -1462,6 +1480,7 @@ const TUNE = [
   // 拿它當旋鈕的話換片數後意義就跑掉了，使用者無從理解。
   ['hfov', 'totalFov',  v => `${v}°　每片 ${(v / S.panels).toFixed(0)}°`],
   ['bot',  'bottomDeg', v => `−${v}°`],
+  ['top',  'topDeg',    v => `+${v}°　垂直共 ${(+v) + S.bottomDeg}°`],
   ['kmh',  'kmh',       v => `${v} km/h`],
   ['pan',  'panels',    v => `${v} 片　每片 ${(S.hFovPer).toFixed(0)}°`],
 ];
@@ -1552,6 +1571,9 @@ addEventListener('keydown', e => {
     S.paniniD = L[(L.findIndex(x => Math.abs(x - S.paniniD) < 0.01) + 1) % L.length];
   }
   else if (e.key === 'f') S.bottomDeg = S.bottomDeg >= 34 ? 20 : S.bottomDeg + 3;
+  // 上緣。往上看不會碰到馬賽克，所以可以放得比下緣寬得多
+  else if (e.key === 'v') { const L = [26, 35, 45, 55, 65];
+    S.topDeg = L[(L.findIndex(x => x >= S.topDeg) + 1) % L.length]; }
   else if (e.key === 'b') S.fit = !S.fit;
   else if (e.key === 'h') {                       // 總視野循環
     const T = [120, 150, 180, 210, 240, 280];
@@ -1606,6 +1628,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
     S.hFovPer = (S.hFovPer * 3) / n; S.panels = n;
   }
   if (q.has('bottom')) S.bottomDeg = +q.get('bottom');
+  if (q.has('top')) S.topDeg = +q.get('top');
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('targets')) {
