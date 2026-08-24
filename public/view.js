@@ -517,6 +517,8 @@ function draw() {
   }
   // 小地圖獨立包一層 —— 它出錯不該把街景畫面一起拖下水
   if (S.mini) { try { drawMini(); } catch {} }
+  // 偵錯:mmvr=1 時把 VR 用的貼圖路徑畫在平面畫面上驗證
+  if (S.mmvrTest) { try { gl.viewport(0, 0, cv.width, cv.height); mmvrDraw(1); } catch {} }
 }
 
 function drawInner() {
@@ -1556,11 +1558,17 @@ function mmvrInit() {
   const fs = `precision mediump float; varying vec2 vUV; uniform sampler2D uTex;
     void main(){ vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb, c.a * 0.92); }`;
   const c2 = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src);
-    gl.compileShader(sh); return sh; };
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
+      MMVR.err = gl.getShaderInfoLog(sh);
+    return sh; };
   const p = gl.createProgram();
   gl.attachShader(p, c2(gl.VERTEX_SHADER, vs));
   gl.attachShader(p, c2(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    MMVR.err = MMVR.err || gl.getProgramInfoLog(p);
+  if (MMVR.err) S.note = 'VR地圖著色器: ' + MMVR.err.slice(0, 60);
   MMVR.prog = p;
   MMVR.aPos = gl.getAttribLocation(p, 'aPos');
   MMVR.uOff = gl.getUniformLocation(p, 'uOff');
@@ -2265,6 +2273,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('mini') === '0') S.mini = false;
+  if (q.get('mmvr') === '1') S.mmvrTest = true;
   if (q.get('season')) S.season = q.get('season');
   if (q.get('targets')) {
     S.targets = q.get('targets').split('|').map(t => {
