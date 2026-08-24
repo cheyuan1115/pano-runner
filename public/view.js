@@ -839,13 +839,6 @@ async function stepOnce() {
         // 用比例逼近而不是直接指過去，才不會在經過它的瞬間甩頭。
         const want = bearingTo(S.cur.meta, S.watchLm);
         S.heading += ad(want, S.heading) * Math.min(1, 0.06 + 2.5 / span * 16);
-      } else if (xr.session) {
-        // VR：轉彎用瞬切（snap turn），不播旋轉動畫 ——
-        // 「世界在眼前轉、身體沒有轉」是頭盔裡最典型的暈眩來源。
-        // 而且瞬切要跟全景切換**同一瞬間**發生（溶解中點 k=0.5）。
-        // 分開跳的話（開始時轉頭、中段換位置）一步之內畫面跳兩次，
-        // 路口連續幾步看起來就是「兩個不同的畫面來回閃動」。
-        S.heading = k < 0.5 ? startHead : aimHead;
       } else {
         S.heading = startHead + ad(aimHead, startHead) * e;
       }
