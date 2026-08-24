@@ -35,6 +35,9 @@ uniform vec3 uTravel;         // 行進方向（已轉到這顆全景的影像�
 uniform float uT, uR;         // 相機沿行進方向平移多少公尺、場景近似半徑
 uniform float uPanoPos;       // 這顆全景在共用世界座標裡的位置（沿行進方向，公尺）
 uniform float uCyl;           // 0 = 多片直線透視／1 = Panini 連續投影
+uniform float uVR;            // 1 = VR：方向由頭盔的矩陣決定，忽略投影參數
+uniform mat4 uInvP;           // 該眼的投影矩陣反矩陣
+uniform mat3 uEyeM;           // 該眼的姿態旋轉（眼睛座標 → 世界）
 uniform float uKx, uKy, uD;   // Panini：水平尺度、垂直尺度、鏡頭距離參數
 uniform float uVsh;           // 垂直位移：讓上緣可以拉得比下緣高（見 applyFov）
 uniform float uFadeA, uFadeB; // 底部淡出：從這個緯度開始，到這個緯度全暗（弧度）
@@ -44,7 +47,14 @@ uniform float uDetS0, uDetSpanS, uDetT0, uDetSpanT, uHasDet;
 const float PI = 3.14159265358979;
 void main() {
   vec3 d;
-  if (uCyl > 0.5) {
+  if (uVR > 0.5) {
+    // VR：把這一眼的 NDC 反投影成視線方向，再轉到世界座標。
+    // WebXR 的視線是 −z 朝前、我們的球是 +z 朝前，z 要翻過來。
+    vec4 t = uInvP * vec4(vUV, -1.0, 1.0);
+    vec3 de = normalize(t.xyz / t.w);
+    vec3 dw = uEyeM * de;
+    d = vec3(dw.x, dw.y, -dw.z);
+  } else if (uCyl > 0.5) {
     // 連續投影，沒有接縫可以折。uD < 0 是圓柱，否則是 Panini。
     //
     // 圓柱：水平角度跟畫面 x 成正比 —— 這就是「無限多片」的極限，
@@ -431,6 +441,7 @@ function drawOne(P, alpha, tanHalf, aspect, tMove, off, panoPos) {
   gl.uniform1f(U('uAspect'), aspect);
   // Panini／圓柱的仰角已經算進取樣窗（vFit），再轉一次就重複了
   gl.uniform1f(U('uPitch'), S.proj === 'pan' ? 0 : rad(S.pitch));
+  gl.uniform1f(U('uVR'), 0);
   gl.uniform1f(U('uAlpha'), alpha);
   gl.uniform1f(U('uOff'), rad(off || 0));
   // 行進方向轉進這顆全景的影像經度座標系
@@ -472,6 +483,7 @@ function draw() {
 }
 
 function drawInner() {
+  if (xr.session) return;               // VR 進行中由 xrFrame 畫
   const dpr = Math.min(2, devicePixelRatio || 1);
   const w = Math.round(cv.clientWidth * dpr), h = Math.round(cv.clientHeight * dpr);
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
@@ -812,7 +824,8 @@ async function stepOnce() {
         S.heading = startHead + ad(aimHead, startHead) * e;
       }
       draw();
-      k < 1 ? requestAnimationFrame(tick) : res();
+      // VR 進行中視窗的 rAF 會被 Quest 停掉，動畫要掛在 XR session 的節拍上
+      k < 1 ? (xr.session ? xr.session.requestAnimationFrame(tick) : requestAnimationFrame(tick)) : res();
     };
     tick();
   });
@@ -1276,6 +1289,105 @@ setInterval(() => {
     else if (Date.now() - S.speakOffAt > 2000) { window.__speaking = false; S.speakOffAt = 0; }
   } else S.speakOffAt = 0;
 }, 500);
+
+// ── VR（WebXR）─────────────────────────────────────────────
+// 只有在 https 下 navigator.xr 才存在（Quest 的瀏覽器開 http 時直接是 undefined）。
+// 進 VR 之後：方向交給頭盔（uEyeM／uInvP），前進方向仍然是 S.travelDir ——
+// 你轉頭看四周，路照走。視窗那份畫面在 VR 進行中不畫（rAF 也被停了）。
+const xr = { session: null, layer: null, refSpace: null, supported: false };
+
+async function vrCheck() {
+  try {
+    if (navigator.xr && await navigator.xr.isSessionSupported('immersive-vr')) {
+      xr.supported = true;
+      const b = $('vrbtn'); if (b) b.style.display = '';
+    }
+  } catch {}
+}
+
+async function enterVR() {
+  if (xr.session) { xr.session.end(); return; }
+  try {
+    await gl.makeXRCompatible();
+    const ses = await navigator.xr.requestSession('immersive-vr',
+      { optionalFeatures: ['local-floor'] });
+    xr.session = ses;
+    xr.layer = new XRWebGLLayer(ses, gl);
+    ses.updateRenderState({ baseLayer: xr.layer });
+    xr.refSpace = await ses.requestReferenceSpace('local-floor')
+      .catch(() => ses.requestReferenceSpace('local'));
+    ses.addEventListener('end', () => {
+      xr.session = null;
+      const b = $('vrbtn'); if (b) b.textContent = 'VR';
+      draw();
+    });
+    const b = $('vrbtn'); if (b) b.textContent = '離開 VR';
+    S.note = '🥽 VR 進行中';
+    ses.requestAnimationFrame(xrFrame);
+  } catch (e) { S.note = 'VR 進不去：' + (e && e.message || e); draw(); }
+}
+
+// mat4 反矩陣（給投影矩陣用）。WebGL1 沒有 inverse()，只能自己算。
+function inv4(m) {
+  const inv = new Float32Array(16);
+  inv[0] = m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
+  inv[4] = -m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
+  inv[8] = m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
+  inv[12] = -m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
+  inv[1] = -m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
+  inv[5] = m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
+  inv[9] = -m[0]*m[9]*m[15]+m[0]*m[11]*m[13]+m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
+  inv[13] = m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
+  inv[2] = m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
+  inv[6] = -m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
+  inv[10] = m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
+  inv[14] = -m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
+  inv[3] = -m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
+  inv[7] = m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
+  inv[11] = -m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
+  inv[15] = m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
+  let det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+  if (!det) return inv;
+  det = 1 / det;
+  for (let i = 0; i < 16; i++) inv[i] *= det;
+  return inv;
+}
+
+function xrFrame(t, frame) {
+  const ses = xr.session;
+  if (!ses) return;
+  ses.requestAnimationFrame(xrFrame);
+  const pose = frame.getViewerPose(xr.refSpace);
+  if (!pose || !S.cur || !S.cur.meta) return;
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, xr.layer.framebuffer);
+  gl.clearColor(0.05, 0.055, 0.065, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform1f(U('uVR'), 1);
+  gl.uniform1f(U('uCyl'), 0);
+  gl.uniform1f(U('uPitch'), 0);
+  gl.uniform1f(U('uOff'), 0);
+  // 朝向：頭盔管轉頭，行進方向的 yaw 疊在世界座標上
+  gl.uniform1f(U('uYaw'), rad(S.heading - S.cur.meta.yaw));
+
+  for (const view of pose.views) {
+    const vp = xr.layer.getViewport(view);
+    gl.viewport(vp.x, vp.y, vp.width, vp.height);
+    gl.uniformMatrix4fv(U('uInvP'), false, inv4(view.projectionMatrix));
+    // transform.matrix 是「眼睛 → 世界」的剛體矩陣，取旋轉那 3x3
+    const m = view.transform.matrix;
+    gl.uniformMatrix3fv(U('uEyeM'), false,
+      [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
+    drawOne(S.cur, 1, 1, 1, S.tMove, 0, 0);
+    if (S.mix > 0 && S.nxt && S.nxt.meta) {
+      gl.uniform1f(U('uYaw'), rad(S.heading - S.nxt.meta.yaw));
+      drawOne(S.nxt, S.mix, 1, 1, S.tMove - S.stepD, 0, 1);
+      gl.uniform1f(U('uYaw'), rad(S.heading - S.cur.meta.yaw));
+    }
+  }
+  gl.uniform1f(U('uVR'), 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
 
 // ── 左下角小地圖 ──────────────────────────────────────────────
 // 跑步時要能一眼看出「我在哪、朝哪、下一個景點在哪邊」。不做互動，
@@ -1865,6 +1977,8 @@ window.__stats = () => ({ steps: S.steps, moved: S.moved, waited: S.waited,
 
 // 麥克風權限需要使用者手勢。從啟動器帶 run=1 進來時沒有手勢，
 // 所以掛一次性的監聽 —— 使用者按任何一個鍵或點一下畫面就開始聽。
+vrCheck();
+window.enterVR = enterVR;               // run.html 的按鈕用
 addEventListener('pointerdown', () => { if (S.mic) startMic(); if (S.voice) startVoice(); }, { once: true });
 addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoice(); }, { once: true });
 

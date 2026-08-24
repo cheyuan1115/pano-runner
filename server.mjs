@@ -8,6 +8,7 @@
 // 沒有 Chrome、沒有 CDP、沒有專用 profile。這支停掉就什麼都不剩。
 
 import { createServer } from 'node:http';
+import { createServer as createTls } from 'node:https';
 import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -125,7 +126,7 @@ const json = (res, obj, code = 200) => {
   res.end(JSON.stringify(obj));
 };
 
-createServer(async (req, res) => {
+const handler = async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   try {
     if (u.pathname === '/api/find') {
@@ -365,4 +366,18 @@ createServer(async (req, res) => {
     if (e.code === 'ENOENT') return json(res, { error: '沒有這個檔' }, 404);
     json(res, { error: String(e.message || e) }, 500);
   }
-}).listen(PORT, () => console.log(`pano-runner  http://localhost:${PORT}`));
+};
+
+createServer(handler).listen(PORT, () => console.log(`pano-runner  http://localhost:${PORT}`));
+
+// HTTPS 給 VR 用。WebXR 只在安全脈絡下存在 —— Quest 的瀏覽器開
+// http://192.168.x.x 時 navigator.xr 直接是 undefined。
+// 自簽憑證第一次連會警告，按「繼續」一次就好。憑證不存在就跳過，不影響一般使用。
+try {
+  const [key, cert] = await Promise.all([
+    readFile(join(fileURLToPath(new URL('.', import.meta.url)), 'cert', 'key.pem')),
+    readFile(join(fileURLToPath(new URL('.', import.meta.url)), 'cert', 'cert.pem')),
+  ]);
+  createTls({ key, cert }, handler).listen(PORT + 1, () =>
+    console.log(`pano-runner  https://192.168.0.117:${PORT + 1}  （VR 用）`));
+} catch { console.log('沒有憑證，HTTPS 未啟動（VR 需要它）'); }
