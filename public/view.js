@@ -626,7 +626,8 @@ function drawInner() {
          + `${Math.round(hHalfDeg() * 2 * S.panels)}°${S.fit ? '　自動比例' : ''}\n`)
     + (S.panelIdx !== null ? `🖥 ${['左', '中', '右'][S.panelIdx]}片（${S.role === 'master' ? '主控' : '從屬'}）   ` : '')
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
-    + (xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   ` : '')
+    + (xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   `
+       : xr.session && HB.at ? `👣 ${HB.kmh.toFixed(1)} km/h   ` : '')
     + (S.photoFail ? `🖼 照片載不到 ×${S.photoFail}   ` : '')
     + (S.mic ? `🎙 ${window.__cad?.spm ? Math.round(window.__cad.spm) + ' spm' : '聽…'}   ` : '')
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
@@ -866,15 +867,19 @@ async function stepOnce() {
   // 手擺速只在「最近有讀到控制器」時生效 —— 放下控制器 2.5 秒後
   // 回到啟動器設定的固定速度（不然速度會凍在放下前的值）
   const paceSrc = () => (xr.session && VH.seen && Date.now() - VH.at < 2500) ? 'hand'
+                      : (xr.session && HB.at && Date.now() - HB.at < 2500) ? 'head'
                       : (S.mic ? 'mic' : null);
   if (paceSrc()) {
-    const read = () => paceSrc() === 'hand'
-      ? Math.min(S.kmhCap || 12, VH.kmh)
-      : micSpeed();
+    const read = () => { const p = paceSrc();
+      return p === 'hand' ? Math.min(S.kmhCap || 12, VH.kmh)
+           : p === 'head' ? Math.min(S.kmhCap || 12, HB.kmh)
+           : micSpeed(); };
     S.kmh = read();
     // 停住的時候不要一直丟出轉場，等訊號回來
     while (S.running && S.kmh < 1.5 && paceSrc()) {
-      S.note = paceSrc() === 'hand' ? '⏸ 手停了，畫面停住（擺手就走）' : '⏸ 沒有腳步聲，畫面停住';
+      S.note = paceSrc() === 'hand' ? '⏸ 手停了，畫面停住（擺手就走）'
+             : paceSrc() === 'head' ? '⏸ 腳步停了，畫面停住（原地踏步就走）'
+             : '⏸ 沒有腳步聲，畫面停住';
       draw(); await sleep(400); S.kmh = read();
     }
     if (!S.running) return;
@@ -1625,6 +1630,34 @@ function mmvrDraw(eyeSign, projMat) {
   gl.activeTexture(gl.TEXTURE0);
 }
 
+// ── 頭部起伏控速(免手)──────────────────────────────────
+// 跑步機上不能拿控制器(會跌倒)。改量頭的上下起伏:走路/跑步時
+// 頭每步自然晃 1-4 公分,原地踏步也一樣。數起伏頻率直接映射速度,
+// 站著不動就停。有拿控制器時手擺優先(見 paceSrc)。
+const HB = { buf: [], peaks: [], kmh: 0, at: 0 };
+function headPace(pose, t) {
+  const y = pose.transform.position.y;
+  HB.buf.push({ t, y });
+  while (HB.buf.length && t - HB.buf[0].t > 3000) HB.buf.shift();
+  if (HB.buf.length < 20) return;
+  // 去趨勢:減掉滑動平均,剩下的就是每一步的起伏
+  const mean = HB.buf.reduce((a, b) => a + b.y, 0) / HB.buf.length;
+  // 找波峰:比前後都高、超過門檻 8mm、與上一個波峰隔 250ms 以上
+  const n = HB.buf.length;
+  const cur = HB.buf[n - 2], prev = HB.buf[n - 3], next = HB.buf[n - 1];
+  if (prev && next && cur.y > prev.y && cur.y >= next.y && cur.y - mean > 0.008) {
+    if (!HB.peaks.length || cur.t - HB.peaks[HB.peaks.length - 1] > 250) HB.peaks.push(cur.t);
+  }
+  while (HB.peaks.length && t - HB.peaks[0] > 5000) HB.peaks.shift();
+  const spm = HB.peaks.length * 12;            // 5 秒窗 → 每分鐘
+  // 直接映射,不用跑步公式(戴 VR 多半是走或原地踏步):
+  // 原地踏步約 100 步/分 ≈ 4 km/h,快走 130 ≈ 6,小跑 160 ≈ 8
+  const raw = spm < 40 ? 0 : Math.min(S.kmhCap || 12, (spm - 40) * 0.07);
+  HB.kmh += (raw - HB.kmh) * (raw > HB.kmh ? 0.2 : 0.06);
+  if (HB.kmh < 0.3) HB.kmh = 0;
+  HB.at = Date.now();
+}
+
 const eyeM9 = new Float32Array(9);       // 每幀重複用，不要讓 GC 有事做
 function xrFrame(t, frame) {
   const ses = xr.session;
@@ -1642,6 +1675,7 @@ function xrFrame(t, frame) {
   if (!pose || !S.cur || !S.cur.meta) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); return; }
   vrGaze(pose);
   handPace(frame, t);
+  headPace(pose, t);
   // VR 小地圖的黑盒子:頭盔裡看不到任何除錯資訊(DOM 不渲染),
   // 狀態定期送回伺服器,從 Mac 端讀
   if (!xr.dbgAt || Date.now() - xr.dbgAt > 3000) {
