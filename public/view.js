@@ -322,8 +322,12 @@ let viewH = 0;
 function vFit(w, h, sc) {
   // tan 在 90 度會爆掉（正切變號 → 高度變負 → 畫面整個翻掉）
   const cap = a => Math.max(-88, Math.min(88, a));
+  // 仰角＝整個取樣窗往上滑：上緣加、下緣**減**。
+  // 先前寫成兩邊都加，而著色器又對整條光線再轉一次仰角 —— 兩層互相抵消，
+  // 視窗被夾滿的預設狀態下按 9 或上下拖曳幾乎看不到變化（「仰角不能調」）。
+  // 現在仰角只在這裡生效，Panini 路徑的 uPitch 一律傳 0。
   let tT = Math.tan(rad(cap(S.topDeg + S.pitch)));
-  let tB = Math.tan(rad(cap(S.bottomDeg + S.pitch)));
+  let tB = Math.tan(rad(cap(S.bottomDeg - S.pitch)));
   const maxHalf = h / w * sc;                 // 視窗用滿高度時的半高
   if ((tT + tB) / 2 > maxHalf) tT = 2 * maxHalf - tB;   // 先壓上緣，下緣不動
   if (tT < 0.05) tT = 0.05;                   // 上緣壓到底了還放不下
@@ -354,8 +358,11 @@ function tileWindow(meta, heading) {
   const cx0 = exact ? Math.floor(((s0 % 1 + 1) % 1) * g.w / TS) : 0;
   const cw = exact ? Math.min(cols, Math.ceil(spanDeg / 360 * g.w / TS) + 1) : cols;
   const vHalf = S.fov / 2;
-  const t0 = Math.max(0, 0.5 - (S.pitch + vHalf + 14) / 180);
-  const t1 = Math.min(1, 0.5 - (S.pitch - vHalf - 14) / 180);
+  // pan 模式的可見範圍由 vFit 決定（仰角已含在內），用實際值抓才不會漏磚塊
+  const topE = (S.proj === 'pan' && vEff.topDeg) ? vEff.topDeg : S.pitch + vHalf;
+  const botE = (S.proj === 'pan' && vEff.topDeg) ? vEff.botDeg : vHalf - S.pitch;
+  const t0 = Math.max(0, 0.5 - (topE + 14) / 180);
+  const t1 = Math.min(1, 0.5 + (botE + 14) / 180);
   const cy0 = Math.max(0, Math.floor(t0 * g.h / TS));
   const cy1 = Math.min(rows - 1, Math.floor(t1 * g.h / TS));
   return { cols, rows, cx0, cw, cy0, ch: cy1 - cy0 + 1, TS, gw: g.w, gh: g.h, exact };
@@ -422,7 +429,8 @@ function drawOne(P, alpha, tanHalf, aspect, tMove, off, panoPos) {
   gl.uniform2fv(U('uBaseScale'), P.baseScale);
   gl.uniform1f(U('uTanHalf'), tanHalf);
   gl.uniform1f(U('uAspect'), aspect);
-  gl.uniform1f(U('uPitch'), rad(S.pitch));
+  // Panini／圓柱的仰角已經算進取樣窗（vFit），再轉一次就重複了
+  gl.uniform1f(U('uPitch'), S.proj === 'pan' ? 0 : rad(S.pitch));
   gl.uniform1f(U('uAlpha'), alpha);
   gl.uniform1f(U('uOff'), rad(off || 0));
   // 行進方向轉進這顆全景的影像經度座標系
