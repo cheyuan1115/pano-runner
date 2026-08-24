@@ -349,7 +349,14 @@ const QUICK = [
   ['紐約中央公園', 40.7713, -73.9740, 16],
   ['京都鴨川', 35.0116, 135.7710, 16],
 ];
-el('quick').innerHTML = QUICK.map((q, i) => `<span data-i="${i}">${q[0]}</span>`).join('');
+// 軌道路線（第五欄是字串的）收進「特色路線」摺疊區，一般城市留在外面
+const isTrail = q => typeof q[4] === 'string';
+el('quick').innerHTML = QUICK.map((q, i) => isTrail(q) ? '' : `<span data-i="${i}">${q[0]}</span>`).join('');
+el('trails').innerHTML = QUICK.map((q, i) => isTrail(q) ? `<span data-i="${i}">${q[0]}</span>` : '').join('');
+el('trailhead').onclick = () => {
+  const open = el('trails').classList.toggle('open');
+  el('trailhead').textContent = open ? '🌸 特色路線 ▾' : '🌸 特色路線 ▸';
+};
 el('quick').onclick = e => {
   const i = e.target.dataset.i;
   if (i === undefined) return;
@@ -366,6 +373,7 @@ el('quick').onclick = e => {
   pts = []; shown = null;
   drawMap(); say();
 };
+el('trails').onclick = el('quick').onclick;
 
 // ── 跑過的路線 ──
 // 跑步頁把每一趟存進 localStorage（同一個來源，這裡讀得到）

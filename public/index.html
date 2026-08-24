@@ -35,6 +35,11 @@
   .quick span { font-size: 12px; padding: 4px 8px; background: #1a1c21; border: 1px solid #33373f;
                 border-radius: 999px; cursor: pointer; }
   .quick span:hover { border-color: #2f7d4f; }
+  /* 特色路線（軌道）收摺起來 —— 11 顆按鈕把版面吃掉太多 */
+  #trailhead { font-size: 12px; padding: 4px 8px; background: #14251a; border: 1px solid #2f7d4f;
+               border-radius: 999px; cursor: pointer; user-select: none; }
+  #trails { display: none; }
+  #trails.open { display: flex; flex-wrap: wrap; gap: 6px; }
 </style>
 
 <div id="map"></div>
@@ -49,6 +54,8 @@
     <button class="ghost" id="go" style="flex:0 0 56px;margin:0">搜尋</button>
   </div>
   <div class="quick" id="quick"></div>
+  <div class="quick" style="margin-top:4px"><span id="trailhead">🌸 特色路線 ▸</span></div>
+  <div class="quick" id="trails"></div>
 
   <label>速度　<b id="kmhv">12</b> km/h</label>
   <input id="kmh" type="range" min="4" max="20" step="1" value="12">
