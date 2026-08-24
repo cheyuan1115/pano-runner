@@ -1355,10 +1355,12 @@ async function enterVR() {
     // 深度緩衝裡是垃圾 —— Quest 的合成器預設會拿深度做每眼的重投影，
     // 照著垃圾扭曲的兩眼對不上，看起來就是「左右眼畫面快速閃動」，
     // 頭有微小晃動時（跑步機上一定有）連直線都會發作。
-    // alpha:false 也重要：底部淡出區的像素 alpha < 1，層允許透明的話
-    // Quest 會把系統背景透進來，那一塊就會閃
-    xr.layer = new XRWebGLLayer(ses, gl, { antialias: true, alpha: false,
-                                           depth: false, ignoreDepthValues: true });
+    // 只設 ignoreDepthValues（合成器不要拿深度做重投影 —— 我們不寫深度，
+    // 緩衝裡是垃圾）。上一版連 alpha:false、depth:false 一起設，
+    // 結果整個 VR 黑畫面 —— 部分 Quest 瀏覽器版本對非預設的層選項有
+    // 已知問題，其他一律用預設值，建層失敗再退回完全無選項。
+    try { xr.layer = new XRWebGLLayer(ses, gl, { ignoreDepthValues: true }); }
+    catch { xr.layer = new XRWebGLLayer(ses, gl); }
     ses.updateRenderState({ baseLayer: xr.layer });
     xr.refSpace = await ses.requestReferenceSpace('local-floor')
       .catch(() => ses.requestReferenceSpace('local'));
