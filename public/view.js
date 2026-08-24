@@ -823,6 +823,7 @@ async function stepOnce() {
   const DISS = Math.min(0.5,
     (xr.session ? (turnAng > 25 ? 8 : 90) : S.dissolveMs) / span);
   let frames = 0;
+  S.anim = true;                        // 動畫期間 heading 由 tick 獨佔
   await new Promise(res => {
     const t = performance.now();
     const tick = () => {
@@ -850,7 +851,8 @@ async function stepOnce() {
       }
       draw();
       // VR 進行中視窗的 rAF 會被 Quest 停掉，動畫要掛在 XR session 的節拍上
-      k < 1 ? (xr.session ? xr.session.requestAnimationFrame(tick) : requestAnimationFrame(tick)) : res();
+      k < 1 ? (xr.session ? xr.session.requestAnimationFrame(tick) : requestAnimationFrame(tick))
+            : (S.anim = false, res());
     };
     tick();
   });
@@ -1353,8 +1355,10 @@ async function enterVR() {
     // 深度緩衝裡是垃圾 —— Quest 的合成器預設會拿深度做每眼的重投影，
     // 照著垃圾扭曲的兩眼對不上，看起來就是「左右眼畫面快速閃動」，
     // 頭有微小晃動時（跑步機上一定有）連直線都會發作。
-    xr.layer = new XRWebGLLayer(ses, gl, { antialias: true, depth: false,
-                                           ignoreDepthValues: true });
+    // alpha:false 也重要：底部淡出區的像素 alpha < 1，層允許透明的話
+    // Quest 會把系統背景透進來，那一塊就會閃
+    xr.layer = new XRWebGLLayer(ses, gl, { antialias: true, alpha: false,
+                                           depth: false, ignoreDepthValues: true });
     ses.updateRenderState({ baseLayer: xr.layer });
     xr.refSpace = await ses.requestReferenceSpace('local-floor')
       .catch(() => ses.requestReferenceSpace('local'));
@@ -1537,9 +1541,13 @@ function drawMini() {
   cv.classList.add('on');
 }
 
-// 播報結束後把視角平順轉回行進方向，不要瞬間彈回去
+// 播報結束後把視角平順轉回行進方向，不要瞬間彈回去。
+// S.anim 檢查不能少：步進動畫每幀寫 S.heading、這裡每 50ms 又扳一次 ——
+// 兩個寫入者以 20Hz 交替，畫面就在兩個朝向之間來回抖。
+// 頭盔裡特別明顯（頭沒動畫面也在抖），平面模式因為動畫本來就往
+// 行進方向收斂、差距小，所以一直沒被發現。
 setInterval(() => {
-  if (S.watchLm || !S.running) return;
+  if (S.anim || S.watchLm || !S.running) return;
   const off = ad(S.travelDir, S.heading);
   if (Math.abs(off) < 0.5) return;
   S.heading += off * 0.12;
