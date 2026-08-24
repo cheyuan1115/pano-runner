@@ -39,6 +39,7 @@ const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
 const PHOTO_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.photocache');
 const VLOG = join(fileURLToPath(new URL('.', import.meta.url)), '.voicelog');
 const WIKI_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.wikicache');
+const MAP_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.maptiles');
 
 // 維基查詢一趟要打六到八次 API，連著打一定 429（實測第二個城市就中）。
 // 所以一定要快取。用約 1.1 公里見方的格子當鍵 —— 跑步時位置一直在動，
@@ -252,6 +253,28 @@ createServer(async (req, res) => {
         await mkdir(PHOTO_DIR, { recursive: true });
         await writeFile(f, buf).catch(() => {});
         return send(buf);
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+    }
+    // 小地圖的磚塊。轉一手是為了存本機 —— 跑同一條路線不用一直跟 CDN 要，
+    // 而且跟街景磚塊搶頻寬會讓畫面卡住。
+    if (u.pathname === '/maptile') {
+      const z = +u.searchParams.get('z'), x = +u.searchParams.get('x'), y = +u.searchParams.get('y');
+      if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y)
+          || z < 1 || z > 19) return json(res, { error: '參數不對' }, 400);
+      const f = join(MAP_DIR, `${z}_${x}_${y}.png`);
+      const send = b => {
+        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=2592000' });
+        res.end(b);
+      };
+      try { return send(await readFile(f)); } catch {}
+      try {
+        const r = await fetch(`https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,
+          { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15000) });
+        if (!r.ok) return json(res, { error: '抓不到磚塊 ' + r.status }, 502);
+        const b = Buffer.from(await r.arrayBuffer());
+        await mkdir(MAP_DIR, { recursive: true });
+        await writeFile(f, b).catch(() => {});
+        return send(b);
       } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
     }
     // 導覽音檔。優先給本機那份（快、離線也能用），沒有才轉到 CDN。

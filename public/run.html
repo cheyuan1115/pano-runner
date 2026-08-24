@@ -14,7 +14,8 @@
   #hud.fold:hover { opacity: 1; }
   #hud b { color: #6fd08c; font-weight: 600; }
   /* Geo Guidelines 要求所有使用都要標示出處，而且不能被遮住或移除 */
-  #attr { position: fixed; left: 12px; bottom: 10px; z-index: 6;
+  /* 小地圖佔了左下角，版權標示挪到右下（右下原本只有 HUD 的說明鈕）。 */
+  #attr { position: fixed; right: 44px; bottom: 10px; z-index: 6;
           font-size: 11px; color: #cfd3d9; letter-spacing: .2px;
           text-shadow: 0 1px 3px rgba(0,0,0,.9); pointer-events: none; }
   #keys { position: fixed; right: 12px; bottom: 12px; color: #8a8f98;
@@ -28,10 +29,11 @@
 </style>
 <canvas id="gl"></canvas>
 <div id="hud" class="fold">載入中…</div>
-<div id="attr">影像 © Google 街景服務</div>
+<div id="attr">影像 © Google 街景服務　地圖 © OpenStreetMap／CARTO</div>
 
 <!-- 景點導覽：照片在右上（雙層交叉淡入），字幕在底部 -->
 <div id="lm-photo"><img alt=""><img alt=""></div>
+<canvas id="minimap"></canvas>
 <div id="lm-ask"></div>
 <div id="lm-bar">
   <div id="lm-name"></div>
@@ -61,6 +63,14 @@
   #lm-photo > img { position: absolute; inset: 0; width: 100%; height: 100%;
                     object-fit: cover; opacity: 0; transition: opacity .7s; }
   #lm-photo > img.on { opacity: 1; }
+  /* 左下角小地圖。跑步時要能一眼看出「我在哪、朝哪、下一個景點在哪邊」，
+     所以不做互動，只畫：走過的路線、目前位置與朝向、附近景點、目標。 */
+  #minimap { position: fixed; left: 16px; bottom: 16px; width: 240px; height: 240px;
+             border-radius: 12px; z-index: 6; opacity: 0;
+             transition: opacity .4s; pointer-events: none;
+             box-shadow: 0 6px 24px rgba(0,0,0,.55);
+             outline: 1px solid rgba(255,255,255,.18); outline-offset: -1px; }
+  #minimap.on { opacity: .92; }
   /* 詢問橫幅。放在畫面中央偏上，跑步時一眼看得到。 */
   #lm-ask { position: fixed; left: 50%; top: 12%; transform: translateX(-50%);
             z-index: 8; display: none; text-align: center; pointer-events: none;

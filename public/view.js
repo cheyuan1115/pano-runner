@@ -240,6 +240,9 @@ const S = {
   askMode: true,
   asking: null,                         // 正在問的景點
   askedIds: new Set(),                  // 問過的不再問
+  mini: true,                           // 左下角小地圖（m 鍵開關）
+  askNear: null,                        // 詢問中的景點最近曾經多近
+  askAway: 0,                           // 連續幾次在拉開距離
   accepting: false,                     // 答應導覽後、路還沒找到的空窗期
   detourFrom: null,                     // 為了看景點而繞路前，原本的目標
   spoken: new Set(),                    // 播過的不再播
@@ -456,6 +459,8 @@ function draw() {
     hud.textContent = '畫面繪製出錯：\n' + (e && e.message || e);
     throw e;
   }
+  // 小地圖獨立包一層 —— 它出錯不該把街景畫面一起拖下水
+  if (S.mini) { try { drawMini(); } catch {} }
 }
 
 function drawInner() {
@@ -1264,6 +1269,103 @@ setInterval(() => {
   } else S.speakOffAt = 0;
 }, 500);
 
+// ── 左下角小地圖 ──────────────────────────────────────────────
+// 跑步時要能一眼看出「我在哪、朝哪、下一個景點在哪邊」。不做互動，
+// 磚塊走自家的 /maptile（會存本機，跑同一條路線不用一直跟 CDN 要）。
+// 路線直接用既有的 S.track（每抵達一顆全景就記一點），不另外維護一份
+const MM = { z: 16, tiles: new Map() };
+const TS = 256;
+const mlng2x = (lng, z) => (lng + 180) / 360 * TS * 2 ** z;
+const mlat2y = (lat, z) => {
+  const s = Math.sin(rad(lat));
+  return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * TS * 2 ** z;
+};
+
+function drawMini() {
+  const cv = $('minimap');
+  if (!cv || !S.cur?.meta) return;
+  const me = S.cur.meta;
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const W = 240, H = 240;
+  if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  const cx = mlng2x(me.lng, MM.z), cy = mlat2y(me.lat, MM.z);
+  const px = p => ({ x: mlng2x(p.lng, MM.z) - cx + W / 2, y: mlat2y(p.lat, MM.z) - cy + H / 2 });
+
+  // 磚塊
+  const n = 2 ** MM.z;
+  const left = cx - W / 2, top = cy - H / 2;
+  for (let tx = Math.floor(left / TS); tx <= Math.floor((left + W) / TS); tx++)
+    for (let ty = Math.floor(top / TS); ty <= Math.floor((top + H) / TS); ty++) {
+      if (ty < 0 || ty >= n) continue;
+      const X = ((tx % n) + n) % n, key = `${MM.z}/${X}/${ty}`;
+      let img = MM.tiles.get(key);
+      if (!img) {
+        img = new Image();
+        img.onload = () => draw();
+        img.src = `/maptile?z=${MM.z}&x=${X}&y=${ty}`;
+        MM.tiles.set(key, img);
+        if (MM.tiles.size > 120) MM.tiles.delete(MM.tiles.keys().next().value);
+      }
+      if (img.complete && img.naturalWidth)
+        g.drawImage(img, tx * TS - left, ty * TS - top, TS, TS);
+    }
+
+  // 走過的路線。只畫最近兩百點，整趟畫下來在 240 像素裡也看不出東西。
+  const tr = (S.track || []).slice(-200);
+  if (tr.length > 1) {
+    g.strokeStyle = 'rgba(255,110,60,.95)'; g.lineWidth = 3;
+    g.lineJoin = g.lineCap = 'round';
+    g.beginPath();
+    tr.forEach((p, i) => { const q = px(p); i ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y); });
+    g.stroke();
+  }
+
+  // 附近景點：播過的灰、下一個亮、其餘白
+  for (const lm of S.nearby || []) {
+    const q = px(lm);
+    if (q.x < -10 || q.x > W + 10 || q.y < -10 || q.y > H + 10) continue;
+    const isNext = S.nextLm && S.nextLm.id === lm.id;
+    g.beginPath(); g.arc(q.x, q.y, isNext ? 5 : 3.5, 0, 7);
+    g.fillStyle = isNext ? '#ffd24a' : (S.spoken.has(lm.id) ? 'rgba(140,140,140,.8)' : 'rgba(255,255,255,.9)');
+    g.fill();
+    g.lineWidth = 1.5; g.strokeStyle = 'rgba(0,0,0,.55)'; g.stroke();
+    if (isNext) {
+      g.font = '600 11px -apple-system,system-ui,sans-serif';
+      g.textAlign = 'center';
+      const t = lm.name.slice(0, 8);
+      const w = g.measureText(t).width;
+      g.fillStyle = 'rgba(0,0,0,.6)';
+      g.fillRect(q.x - w / 2 - 4, q.y - 22, w + 8, 14);
+      g.fillStyle = '#ffd24a'; g.fillText(t, q.x, q.y - 11);
+    }
+  }
+
+  // 目標（跑步機路線的下一個點）
+  if (S.target) {
+    const q = px(S.target);
+    if (q.x > -20 && q.x < W + 20 && q.y > -20 && q.y < H + 20) {
+      g.strokeStyle = '#6fd08c'; g.lineWidth = 2;
+      g.beginPath(); g.arc(q.x, q.y, 7, 0, 7); g.stroke();
+      g.beginPath(); g.moveTo(q.x - 10, q.y); g.lineTo(q.x + 10, q.y);
+      g.moveTo(q.x, q.y - 10); g.lineTo(q.x, q.y + 10); g.stroke();
+    }
+  }
+
+  // 目前位置：箭頭指著行進方向
+  const a = rad(S.travelDir);
+  g.save(); g.translate(W / 2, H / 2); g.rotate(a);
+  g.beginPath(); g.moveTo(0, -9); g.lineTo(6, 7); g.lineTo(0, 4); g.lineTo(-6, 7); g.closePath();
+  g.fillStyle = '#4aa3ff'; g.fill();
+  g.lineWidth = 1.5; g.strokeStyle = '#fff'; g.stroke();
+  g.restore();
+
+  cv.classList.add('on');
+}
+
 // 播報結束後把視角平順轉回行進方向，不要瞬間彈回去
 setInterval(() => {
   if (S.watchLm || !S.running) return;
@@ -1280,7 +1382,10 @@ function refreshNext(meta) {
   for (const lm of S.nearby || []) {
     if (S.spoken.has(lm.id)) continue;
     const d = distM(meta, lm);
-    if (Math.abs(ad(bearingTo(meta, lm), S.travelDir)) > 90) continue;
+    // 「只算前方的」在經過的瞬間會把景點剔除，HUD 的距離就從十公尺
+    // 直接跳到下一個景點（實測跳成 345 公尺）。五十公尺內豁免 ——
+    // 那麼近的時候方位已經沒有意義了。
+    if (d > 50 && Math.abs(ad(bearingTo(meta, lm), S.travelDir)) > 90) continue;
     if (!next || d < next.d) next = { ...lm, d };
   }
   S.nextLm = next;
@@ -1372,15 +1477,31 @@ async function maybeNarrate(meta) {
     // 夠你反應，也夠繞過去。
     const n = S.nextLm;
     if (S.asking) {
-      // 已經在問了：跑過去或太遠就收起來，並記成問過了
-      const still = n && n.id === S.asking.id && n.d < 320
-        && Math.abs(ad(bearingTo(meta, S.asking), S.travelDir)) < 80;
-      if (!still) { S.askedIds.add(S.asking.id); S.spoken.add(S.asking.id); hideAsk(); }
+      // 收框的判定改看「距離連續變遠」，**不看方位**。
+      //
+      // 先前是「任何一步方位差超過 80 度就收」—— 但離景點愈近方位擺動愈大，
+      // 十公尺處跑一步方位就可能轉一百多度。實測連續四次都是 −76/−47/−49/−55，
+      // 第五次跳到 −133 就被收掉了，等於在最該喊「導覽」的位置把機會收走。
+      // 距離是穩定的，方位不是。
+      const d = distM(meta, S.asking);
+      S.askNear = Math.min(S.askNear ?? Infinity, d);
+      // 六十公尺內無條件留著 —— 那個範圍你隨時可能喊
+      if (d < 60) { S.askAway = 0; return; }
+      // 比最近點遠了 40 公尺才算一次「在拉開」，連續三次才收
+      S.askAway = (d > S.askNear + 40) ? (S.askAway || 0) + 1 : 0;
+      if (S.askAway >= 3 || d > 380) {
+        // **只記「問過」，不記「播過」。**
+        // 先前這裡也做了 S.spoken.add —— 那是「播過的不再播」的清單，
+        // 景點一句話都沒播卻被塞進去，等於永久封殺：不再問、不再播、
+        // HUD 也不再顯示，而且距離會突然跳到下一個景點。
+        S.askedIds.add(S.asking.id);
+        hideAsk(); S.askNear = null; S.askAway = 0;
+      }
       return;
     }
     // S.accepting：正在為剛答應的景點找路，這時候不要問下一個
     if (!S.accepting && n && n.d < 300 && !S.askedIds.has(n.id)
-        && S.moved - S.lastSpokeAt > 300) showAsk(n);
+        && S.moved - S.lastSpokeAt > 300) { showAsk(n); S.askNear = n.d; S.askAway = 0; }
     return;
   }
 
@@ -1679,6 +1800,12 @@ addEventListener('keydown', e => {
   }
   else if (e.key === 'f') S.bottomDeg = S.bottomDeg >= 34 ? 20 : S.bottomDeg + 3;
   // 上緣。往上看不會碰到馬賽克，所以可以放得比下緣寬得多
+  else if (e.key === 'm') {
+    S.mini = !S.mini;
+    const cv = $('minimap'); if (cv && !S.mini) cv.classList.remove('on');
+    S.note = S.mini ? '🗺 小地圖開' : '🗺 小地圖關';
+  }
+  else if (e.key === 'M') { MM.z = MM.z >= 17 ? 14 : MM.z + 1; S.note = `🗺 縮放 z${MM.z}`; }
   else if (e.key === 'v') { const L = [26, 35, 45, 55, 65, 75];
     S.topDeg = L[(L.findIndex(x => x >= S.topDeg) + 1) % L.length]; }
   else if (e.key === 'b') S.fit = !S.fit;
@@ -1738,6 +1865,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.has('top')) S.topDeg = +q.get('top');
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
+  if (q.get('mini') === '0') S.mini = false;
   if (q.get('targets')) {
     S.targets = q.get('targets').split('|').map(t => {
       const [la, ln] = t.split(',').map(Number);
