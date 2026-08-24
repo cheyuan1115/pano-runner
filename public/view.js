@@ -518,7 +518,7 @@ function draw() {
   // 小地圖獨立包一層 —— 它出錯不該把街景畫面一起拖下水
   if (S.mini) { try { drawMini(); } catch {} }
   // 偵錯:mmvr=1 時把 VR 用的貼圖路徑畫在平面畫面上驗證
-  if (S.mmvrTest) { try { gl.viewport(0, 0, cv.width, cv.height); mmvrDraw(1); } catch {} }
+  if (S.mmvrTest) { try { gl.viewport(0, 0, cv.width, cv.height); mmvrDraw(0, null); } catch {} }
 }
 
 function drawInner() {
@@ -1552,9 +1552,16 @@ function handPace(frame, t) {
 // 讓面板看起來在兩公尺左右 —— 零視差會像貼在無限遠,眼睛會打架。
 const MMVR = { prog: null, buf: null, tex: null, aPos: 0, uOff: null, uTex: null, last: 0 };
 function mmvrInit() {
-  const vs = `attribute vec2 aPos; uniform vec2 uOff; varying vec2 vUV;
+  // 面板放在「眼空間」頭前 1.35 公尺、偏下 —— 不能用原始 NDC:
+  // 每隻眼的投影視錐是不對稱的,同一個 NDC 位置在左右眼落在不同角度,
+  // 兩眼對不起來就是雙影(實測)。用每隻眼自己的投影矩陣投出來,
+  // 加上半瞳距的位移,視差幾何正確、穩定融合在 1.35 公尺。
+  // (角落也不行 —— 眼緩衝區邊角不在鏡片可視圈裡,畫了看不到。)
+  const vs = `attribute vec2 aPos; uniform mat4 uP; uniform float uEyeOff; varying vec2 vUV;
     void main(){ vUV = vec2(aPos.x, 1.0 - aPos.y);
-      gl_Position = vec4(uOff + aPos * vec2(0.42, 0.42) - vec2(0.95, 0.95), 0.0, 1.0); }`;
+      vec3 p = vec3((aPos.x - 0.5) * 0.55 + uEyeOff,
+                    (aPos.y - 0.5) * 0.55 - 0.52, -1.35);
+      gl_Position = uP * vec4(p, 1.0); }`;
   const fs = `precision mediump float; varying vec2 vUV; uniform sampler2D uTex;
     void main(){ vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb, c.a * 0.92); }`;
   const c2 = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src);
@@ -1571,7 +1578,8 @@ function mmvrInit() {
   if (MMVR.err) S.note = 'VR地圖著色器: ' + MMVR.err.slice(0, 60);
   MMVR.prog = p;
   MMVR.aPos = gl.getAttribLocation(p, 'aPos');
-  MMVR.uOff = gl.getUniformLocation(p, 'uOff');
+  MMVR.uP = gl.getUniformLocation(p, 'uP');
+  MMVR.uEyeOff = gl.getUniformLocation(p, 'uEyeOff');
   MMVR.uTex = gl.getUniformLocation(p, 'uTex');
   MMVR.buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, MMVR.buf);
@@ -1583,12 +1591,16 @@ function mmvrInit() {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 }
-// eyeSign:左眼 +1、右眼 −1,做出微內聚(看起來在近處)
-function mmvrDraw(eyeSign) {
-  if (!S.mini) return;
+// 平面偵錯用的固定透視矩陣(90 度視野)
+const FLAT_P = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,-1.02,-1, 0,0,-0.202,0]);
+// eyeSign:左眼 +1、右眼 −1(半瞳距位移);projMat = 該眼的投影矩陣
+function mmvrDraw(eyeSign, projMat) {
+  MMVR.dbg = MMVR.dbg || {};
+  if (!S.mini) { MMVR.dbg.skip = 'mini關'; return; }
   const cvm = $('minimap');
-  if (!cvm || !cvm.width) return;
+  if (!cvm || !cvm.width) { MMVR.dbg.skip = 'canvas空:' + (cvm ? cvm.width : '無'); return; }
   if (!MMVR.prog) mmvrInit();
+  MMVR.dbg.skip = null;
   const now = performance.now();
   gl.activeTexture(gl.TEXTURE2);
   gl.bindTexture(gl.TEXTURE_2D, MMVR.tex);
@@ -1601,8 +1613,11 @@ function mmvrDraw(eyeSign) {
   gl.enableVertexAttribArray(MMVR.aPos);
   gl.vertexAttribPointer(MMVR.aPos, 2, gl.FLOAT, false, 0, 0);
   gl.uniform1i(MMVR.uTex, 2);
-  gl.uniform2f(MMVR.uOff, eyeSign * 0.015, 0);
+  gl.uniformMatrix4fv(MMVR.uP, false, projMat || FLAT_P);
+  gl.uniform1f(MMVR.uEyeOff, eyeSign * 0.0315);   // 半瞳距 ≈ 63mm / 2
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  MMVR.dbg.glerr = gl.getError();
+  MMVR.dbg.drawn = (MMVR.dbg.drawn || 0) + 1;
   // 還原主程式的狀態 —— 主管線假設自己的 program/buffer 一直綁著
   gl.useProgram(prog);
   gl.bindBuffer(gl.ARRAY_BUFFER, mainBuf);
@@ -1627,6 +1642,15 @@ function xrFrame(t, frame) {
   if (!pose || !S.cur || !S.cur.meta) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); return; }
   vrGaze(pose);
   handPace(frame, t);
+  // VR 小地圖的黑盒子:頭盔裡看不到任何除錯資訊(DOM 不渲染),
+  // 狀態定期送回伺服器,從 Mac 端讀
+  if (!xr.dbgAt || Date.now() - xr.dbgAt > 3000) {
+    xr.dbgAt = Date.now();
+    const cvm = $('minimap');
+    try { fetch('/api/vlog', { method: 'POST', body: JSON.stringify({ ev: 'mmvr',
+      mini: S.mini, canvasW: cvm ? cvm.width : -1, err: MMVR.err || null,
+      dbg: MMVR.dbg || null, prog: !!MMVR.prog }) }).catch(() => {}); } catch {}
+  }
   gl.uniform1f(U('uVR'), 1);
   gl.uniform1f(U('uCyl'), 0);
   gl.uniform1f(U('uPitch'), 0);
@@ -1650,8 +1674,8 @@ function xrFrame(t, frame) {
       drawOne(S.nxt, S.mix, 1, 1, S.tMove - S.stepD, 0, 1);
       gl.uniform1f(U('uYaw'), rad(S.heading - S.cur.meta.yaw));
     }
-    // 小地圖面板(左眼 +、右眼 − 的內聚位移)
-    mmvrDraw(view.eye === 'left' ? 1 : -1);
+    // 小地圖面板:用這隻眼的投影矩陣 + 半瞳距位移
+    mmvrDraw(view.eye === 'left' ? 1 : -1, view.projectionMatrix);
   }
   gl.uniform1f(U('uVR'), 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
