@@ -1817,8 +1817,18 @@ addEventListener('keydown', e => {
     S.note = S.mini ? '🗺 小地圖開' : '🗺 小地圖關';
   }
   else if (e.key === 'M') { MM.z = MM.z >= 17 ? 14 : MM.z + 1; S.note = `🗺 縮放 z${MM.z}`; }
-  else if (e.key === 'v') { const L = [26, 35, 45, 55, 65, 75];
-    S.topDeg = L[(L.findIndex(x => x >= S.topDeg) + 1) % L.length]; }
+  // 上緣檔位如果被視窗上限夾住、畫面跟現在一樣，就直接跳下一檔 ——
+  // 預設 65 在多數視窗已經頂到上限，65→75 畫面完全相同，按了像沒反應。
+  else if (e.key === 'v') {
+    const L = [26, 35, 45, 55, 65, 75];
+    const before = vEff.topDeg;
+    for (let i = 0; i < L.length; i++) {
+      S.topDeg = L[(L.findIndex(x => x >= S.topDeg) + 1) % L.length];
+      draw();
+      if (Math.abs(vEff.topDeg - before) > 1) break;
+    }
+    S.note = `垂直上緣 +${S.topDeg}°（實際畫到 +${vEff.topDeg.toFixed(0)}°）`;
+  }
   else if (e.key === 'b') S.fit = !S.fit;
   else if (e.key === 'h') {                       // 總視野循環
     const T = [120, 150, 180, 210, 240, 280];
