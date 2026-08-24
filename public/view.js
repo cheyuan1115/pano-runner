@@ -1131,9 +1131,8 @@ function speak(lm) {
   $('lm-name').textContent = lm.name;
   $('lm-text').textContent = (lm.lines && lm.lines[0]) || '';
   bar.classList.add('on');
-  // 第一張立刻開抓。先前是等 audioEl.onloadedmetadata 才開始 ——
-  // 前面還有 550 ms 的延遲，加上第一次抓維基要三秒，照片會比字幕晚很多才出現。
-  setTimeout(() => showPhoto(pi++), 0);
+  // 開播就啟動照片迴圈，不等音檔的中繼資料
+  setTimeout(() => { showLoop(); }, 0);
 
   // 照片直接餵給 <img>，不做預載、不轉 blob。
   //
@@ -1144,40 +1143,44 @@ function speak(lm) {
   //      一張都載不進來。
   // 現在網址指向自家的 /photo（同源、伺服器端有快取），<img> 只發一次請求，
   // 尺寸從 img 自己身上讀，沒有任何中間層可以壞掉。
-  // photoSeq：一輪一個序號。輪播計時器每次開新的一輪，舊一輪的重試鏈立刻作廢。
-  // 沒有這個的話：照片沒快取到、撞到維基的 429 時，onerror 每 700ms 試下一張，
-  // 而計時器又開新的鏈 —— 幾條鏈同時活著，每條成功一次就交叉淡入一次，
-  // 疊起來就是「超過一張照片就狂閃」。badPhoto 記住失敗的網址，之後的輪播
-  // 直接跳過，不會一直轉回去踩同一個 429。
-  let photoSeq = 0;
-  const badPhoto = new Set();
-  const showPhoto = (k, tries = 0, seq = null) => {
-    const ph = lm.photos || [];
-    if (seq === null) seq = ++photoSeq;          // 新的一輪；舊鏈全部失效
-    if (seq !== photoSeq) return;
-    if (finished || !ph.length || tries >= ph.length || !mine()) return;
-    const url = ph[k % ph.length];
-    if (badPhoto.has(url)) { showPhoto(k + 1, tries + 1, seq); return; }
-    const el = layers[cur ^ 1];
-    el.onload = () => {
-      if (seq !== photoSeq) return;              // 這一輪已經被取代了
-      if (finished || !mine() || !el.naturalWidth) return;
-      // 框固定，照片用 CSS 的 object-fit: contain 完整放進去
-      //（框跟著每張照片變形是另一種「一直閃」，之前修過了）。
-      el.classList.add('on');
-      layers[cur].classList.remove('on');
-      cur ^= 1;
-      pv.classList.add('on');           // 只有真的畫出來了才顯示外框
-    };
-    el.onerror = () => {
-      badPhoto.add(url);
-      S.photoFail = (S.photoFail || 0) + 1;
-      if (seq === photoSeq && mine() && !finished)
-        setTimeout(() => showPhoto(k + 1, tries + 1, seq), 700);
-    };
-    // 同一個網址再設一次不會觸發 onload（瀏覽器認為沒變），要自己叫
-    if (el.getAttribute('src') === url) { if (el.complete) el.onload(); return; }
-    el.src = url;
+  // 照片就一條規則：**一張展示滿八秒，下一張完整載好了才換。**
+  // 之前用「計時器輪播＋失敗重試鏈」，載入失敗時鏈會疊加，狂閃。
+  // 這裡整個拆掉：一條循序迴圈，先在背景把下一張整張載完（載不完就跳過它），
+  // 載好了才淡入 —— 畫面上永遠只有「完整的照片」在換，換不動就停在目前這張。
+  const showLoop = async () => {
+    const naps = ms => new Promise(r => setTimeout(r, ms));
+    const ph = (lm.photos || []).filter(Boolean);
+    if (!ph.length) return;
+    const HOLD = 8000;                       // 一張至少完整展示八秒
+    const dead = new Set();                  // 載不進來的，之後不再試
+    let k = 0, shownAny = false;
+    while (!finished && mine()) {
+      // 背景把下一張整張載完。失敗就試再下一張，全滅就算了。
+      let img = null;
+      for (let t = 0; t < ph.length && !img; t++) {
+        const url = ph[k % ph.length]; k++;
+        if (dead.has(url)) continue;
+        img = await new Promise(res => {
+          const i = new Image();
+          i.onload = () => res(i.naturalWidth ? i : null);
+          i.onerror = () => { dead.add(url); res(null); };
+          i.src = url;
+        });
+        if (finished || !mine()) return;
+      }
+      if (img) {
+        // 圖已在瀏覽器快取裡，設 src 是立即的 —— 淡入的一定是完整的圖
+        const el = layers[cur ^ 1];
+        el.src = img.src;
+        el.classList.add('on');
+        layers[cur].classList.remove('on');
+        cur ^= 1;
+        pv.classList.add('on');
+        shownAny = true;
+      } else if (!shownAny) return;          // 一張都載不到，框不開
+      if (dead.size >= ph.length && shownAny) return;  // 剩下的都壞了，停在這張
+      await naps(HOLD);
+    }
   };
 
   // 維基來的景點沒有音檔（只有 12 個城市有人工錄的），改用瀏覽器的語音合成。
@@ -1186,10 +1189,8 @@ function speak(lm) {
     setTimeout(() => {
       if (!mine()) return;
       const lines = (lm.lines && lm.lines.length) ? lm.lines : [lm.script || lm.name];
-      // 照片依總字數估時間輪播（實測 zh-TW 大約每秒五個字）
+      // 照片由 showLoop 自己管（一張滿八秒才換），這裡只管字幕與語音
       const secs = Math.max(8, lines.join('').length / 5);
-      photoTimer = setInterval(() => showPhoto(pi++),
-        Math.max(4000, secs * 1000 / Math.max(1, (lm.photos || []).length)));
       let i = 0;
       const next = () => {
         if (!mine() || i >= lines.length) { finishSay(); return; }
@@ -1252,14 +1253,7 @@ function speak(lm) {
     }
     audioEl.onended = done;
     audioEl.onerror = () => { S.note = `⚠ ${lm.name} 的音檔放不出來`; done(); };
-    audioEl.onloadedmetadata = () => {
-      if (!mine()) return;
-      // 第一張在上面已經開抓了，這裡只排接下來的輪播
-      const per = Math.max(4000, (audioEl.duration * 1000) / Math.max(1, (lm.photos || []).length));
-      clearInterval(photoTimer);
-      photoTimer = setInterval(() => showPhoto(pi++), per);
-    };
-    if (audioEl.readyState >= 1) audioEl.onloadedmetadata();
+    // 照片由 showLoop 自己管，這裡不再需要 onloadedmetadata
     audioEl.play().catch(done);
   }, 550);
   draw();
