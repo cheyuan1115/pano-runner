@@ -155,7 +155,8 @@ gl.useProgram(prog);
 gl.enable(gl.BLEND);
 gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+const mainBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, mainBuf);
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
 const aPos = gl.getAttribLocation(prog, 'aPos');
 gl.enableVertexAttribArray(aPos);
@@ -1543,6 +1544,64 @@ function handPace(frame, t) {
   VH.at = Date.now();
 }
 
+// ── VR 裡的小地圖 ──────────────────────────────────────────
+// DOM 疊層在沉浸模式不會顯示,把 drawMini 畫好的 canvas 當紋理,
+// 貼在每一眼視野的左下角(頭鎖定)。兩眼加一點內聚位移,
+// 讓面板看起來在兩公尺左右 —— 零視差會像貼在無限遠,眼睛會打架。
+const MMVR = { prog: null, buf: null, tex: null, aPos: 0, uOff: null, uTex: null, last: 0 };
+function mmvrInit() {
+  const vs = `attribute vec2 aPos; uniform vec2 uOff; varying vec2 vUV;
+    void main(){ vUV = vec2(aPos.x, 1.0 - aPos.y);
+      gl_Position = vec4(uOff + aPos * vec2(0.42, 0.42) - vec2(0.95, 0.95), 0.0, 1.0); }`;
+  const fs = `precision mediump float; varying vec2 vUV; uniform sampler2D uTex;
+    void main(){ vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb, c.a * 0.92); }`;
+  const c2 = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src);
+    gl.compileShader(sh); return sh; };
+  const p = gl.createProgram();
+  gl.attachShader(p, c2(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, c2(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  MMVR.prog = p;
+  MMVR.aPos = gl.getAttribLocation(p, 'aPos');
+  MMVR.uOff = gl.getUniformLocation(p, 'uOff');
+  MMVR.uTex = gl.getUniformLocation(p, 'uTex');
+  MMVR.buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, MMVR.buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,0, 1,0, 0,1, 1,1]), gl.STATIC_DRAW);
+  MMVR.tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, MMVR.tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+// eyeSign:左眼 +1、右眼 −1,做出微內聚(看起來在近處)
+function mmvrDraw(eyeSign) {
+  if (!S.mini) return;
+  const cvm = $('minimap');
+  if (!cvm || !cvm.width) return;
+  if (!MMVR.prog) mmvrInit();
+  const now = performance.now();
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, MMVR.tex);
+  if (now - MMVR.last > 250) {          // 地圖內容 4Hz 更新就夠,省上傳
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cvm);
+    MMVR.last = now;
+  }
+  gl.useProgram(MMVR.prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, MMVR.buf);
+  gl.enableVertexAttribArray(MMVR.aPos);
+  gl.vertexAttribPointer(MMVR.aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform1i(MMVR.uTex, 2);
+  gl.uniform2f(MMVR.uOff, eyeSign * 0.015, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  // 還原主程式的狀態 —— 主管線假設自己的 program/buffer 一直綁著
+  gl.useProgram(prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, mainBuf);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.activeTexture(gl.TEXTURE0);
+}
+
 const eyeM9 = new Float32Array(9);       // 每幀重複用，不要讓 GC 有事做
 function xrFrame(t, frame) {
   const ses = xr.session;
@@ -1583,6 +1642,8 @@ function xrFrame(t, frame) {
       drawOne(S.nxt, S.mix, 1, 1, S.tMove - S.stepD, 0, 1);
       gl.uniform1f(U('uYaw'), rad(S.heading - S.cur.meta.yaw));
     }
+    // 小地圖面板(左眼 +、右眼 − 的內聚位移)
+    mmvrDraw(view.eye === 'left' ? 1 : -1);
   }
   gl.uniform1f(U('uVR'), 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
