@@ -1150,14 +1150,9 @@ function speak(lm) {
     const el = layers[cur ^ 1];
     el.onload = () => {
       if (finished || !mine() || !el.naturalWidth) return;
-      // 框的寬高依照片的實際比例算，並夾在畫面的上限內
-      const ar = el.naturalWidth / el.naturalHeight;
-      const maxW = Math.min(900, innerWidth * 0.46);
-      const maxH = innerHeight * 0.6;
-      let w = maxW, h = w / ar;
-      if (h > maxH) { h = maxH; w = h * ar; }
-      pv.style.width = Math.round(w) + 'px';
-      pv.style.height = Math.round(h) + 'px';
+      // 框固定，照片用 CSS 的 object-fit: contain 完整放進去。
+      // 先前在這裡依每張照片的比例改框的寬高 —— 六張輪播時框一直在變形，
+      // 那就是「有多張照片時就會一直閃」的成因。
       el.classList.add('on');
       layers[cur].classList.remove('on');
       cur ^= 1;

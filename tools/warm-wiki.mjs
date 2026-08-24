@@ -17,7 +17,7 @@
 import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { wikiNearby, tune } from '../wiki.mjs';
+import { wikiNearby, fetchPhoto, photoState, tune } from '../wiki.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const WIKI = join(HERE, '..', '.wikicache');
@@ -102,21 +102,11 @@ let got = 0, had = 0, bad = 0, bytes = 0;
 for (const u of urls) {
   const f = keyOf(u);
   try { await access(f); had++; continue; } catch {}
-  let ok = false;
-  for (let t = 0; t < 3 && !ok; t++) {
-    try {
-      const r = await fetch(u, { headers: { 'User-Agent': UA }, redirect: 'follow',
-                                 signal: AbortSignal.timeout(30000) });
-      if (r.status === 429) { await sleep(3000 * (t + 1)); continue; }
-      if (!r.ok) break;
-      const b = Buffer.from(await r.arrayBuffer());
-      await writeFile(f, b); bytes += b.length; got++; ok = true;
-    } catch { await sleep(1500); }
-  }
-  if (!ok) bad++;
-  await sleep(700);
+  const b = await fetchPhoto(u);
+  if (b) { await writeFile(f, b); bytes += b.length; got++; } else bad++;
+  const p = photoState();
   process.stdout.write(`\r  照片 ${got + had + bad}/${urls.length}　新抓 ${got}　已有 ${had}`
-    + `　失敗 ${bad}　${(bytes / 1048576).toFixed(1)} MB   `);
+    + `　失敗 ${bad}　${(bytes / 1048576).toFixed(1)} MB　間隔 ${p.gap}ms   `);
 }
 console.log(`\n\n  ${name} 完成`);
 console.log(`  景點 ${all.size} 個、照片 ${got + had} 張、${(bytes / 1048576).toFixed(1)} MB`);

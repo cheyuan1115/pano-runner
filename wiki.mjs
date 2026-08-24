@@ -371,6 +371,30 @@ export async function moreImages(titles, want = 5, host = 'zh.wikipedia.org') {
   return out;
 }
 
+// 照片下載也要節流。upload.wikimedia.org 有自己的限流，而且比 API 還兇 ——
+// 實測固定間隔 600 毫秒抓，六張裡四張回 429（成功率四成）。
+// 跟 API 分開算一組間隔，因為兩邊的額度是分開的。
+const PT = { gap: 800, min: 500, max: 30000, last: 0, hits: 0, ok: 0 };
+export const photoState = () => ({ ...PT });
+export async function fetchPhoto(url, tries = 4) {
+  for (let i = 0; i < tries; i++) {
+    const wait = PT.last + PT.gap - Date.now();
+    if (wait > 0) await nap(wait);
+    PT.last = Date.now();
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow',
+                                   signal: AbortSignal.timeout(30000) });
+      if (r.status === 429) { PT.hits++; PT.gap = Math.min(PT.max, Math.round(PT.gap * 1.8)); continue; }
+      if (!r.ok) return null;
+      const b = Buffer.from(await r.arrayBuffer());
+      PT.ok++;
+      if (PT.ok % 12 === 0) PT.gap = Math.max(PT.min, Math.round(PT.gap * 0.85));
+      return b;
+    } catch { PT.gap = Math.min(PT.max, Math.round(PT.gap * 1.3)); }
+  }
+  return null;
+}
+
 // 逐句切開當字幕用
 const sentences = t => (t.match(/[^。！？!?]+[。！？!?]?/g) || []).map(s => s.trim()).filter(s => s.length > 1);
 

@@ -12,7 +12,7 @@
 import { readdir, readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { moreImages, zhTitleOf, tune, throttleState } from '../wiki.mjs';
+import { moreImages, zhTitleOf, fetchPhoto, photoState, tune, throttleState } from '../wiki.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const WIKI = join(HERE, '..', '.wikicache');
@@ -96,21 +96,12 @@ let dl = 0, had = 0, bad = 0, bytes = 0, n = 0;
 for (const u of all) {
   n++;
   try { await access(keyOf(u)); had++; continue; } catch {}
-  let ok = false;
-  for (let t = 0; t < 3 && !ok; t++) {
-    try {
-      const r = await fetch(u, { headers: { 'User-Agent': UA }, redirect: 'follow',
-                                 signal: AbortSignal.timeout(30000) });
-      if (r.status === 429) { await sleep(3000 * (t + 1)); continue; }
-      if (!r.ok) break;
-      const b = Buffer.from(await r.arrayBuffer());
-      await writeFile(keyOf(u), b); bytes += b.length; dl++; ok = true;
-    } catch { await sleep(1500); }
-  }
-  if (!ok) bad++;
-  await sleep(600);
-  if (n % 10 === 0 || n === all.size)
+  const b = await fetchPhoto(u);
+  if (b) { await writeFile(keyOf(u), b); bytes += b.length; dl++; } else bad++;
+  if (n % 10 === 0 || n === all.size) {
+    const p = photoState();
     process.stdout.write(`\r  照片 ${n}/${all.size}　新抓 ${dl}　已有 ${had}　失敗 ${bad}`
-      + `　${(bytes / 1048576).toFixed(1)} MB   `);
+      + `　${(bytes / 1048576).toFixed(1)} MB　間隔 ${p.gap}ms　限流 ${p.hits}   `);
+  }
 }
 console.log(`\n\n  完成：補了 ${added} 張給 ${touched} 個景點，下載 ${dl} 張、${(bytes / 1048576).toFixed(1)} MB`);

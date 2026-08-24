@@ -45,23 +45,27 @@
   /* 比例由照片本身決定（載入時動態設 aspect-ratio）。
      維基共享資源的照片比例從 1.33 到 2.52 都有 —— 固定 4:3 配 cover 會把
      全景照裁掉將近一半，那就是「照片異常」的原因。 */
-  /* 寬高由 JS 依照片的實際比例算好再設 —— CSS 的 aspect-ratio 配上 max-height
-     不會如預期縮放（實測比例設成 2.52 但框仍維持 1.46）。
-     維基的照片比例從 1.33 到 2.52 都有，固定框會把全景照裁掉近一半。
+  /* 框固定不動，照片用 contain 完整放進去。
+     先前是由 JS 依每張照片的比例改框的寬高 —— 維基的照片比例從 1.33 到 2.52
+     都有，六張輪播時框就一直在變形，看起來就是「一直閃」。
+     固定框之後照片上下（或左右）會留空，但**不裁切、框也不動**。
 
-     **底色一定要透明。** 先前是 #14161a，於是照片一載不到就變成一塊黑板 ——
-     那正是「圖是黑的」看到的東西。透明的話載不到就只是看不見。 */
-  #lm-photo { position: fixed; right: 16px; top: 16px; width: 676px; height: 450px;
+     **底色一定要透明。** 先前是 #14161a，照片一載不到就變成一塊黑板 ——
+     那正是「圖是黑的」看到的東西。透明的話載不到只是看不見。 */
+  #lm-photo { position: fixed; right: 16px; top: 16px;
+              width: min(900px, 46vw); height: min(560px, 29vw);
               border-radius: 14px; overflow: hidden;
               z-index: 7; opacity: 0;
-              transition: opacity .5s, width .35s, height .35s;
-              box-shadow: 0 10px 40px rgba(0,0,0,.6); pointer-events: none;
-              background: transparent; }
+              transition: opacity .5s;
+              pointer-events: none; background: transparent; }
   #lm-photo.on { opacity: 1; }
   /* 用真正的 <img>，不用 background-image。差別是 <img> 只會發一次請求、
      不需要 CORS、也沒有 blob 網址被回收的問題。 */
+  /* contain：整張照片放得進去，不裁切。cover 會把全景照裁掉近一半。 */
   #lm-photo > img { position: absolute; inset: 0; width: 100%; height: 100%;
-                    object-fit: cover; opacity: 0; transition: opacity .7s; }
+                    object-fit: contain; object-position: right top;
+                    opacity: 0; transition: opacity .7s;
+                    filter: drop-shadow(0 8px 28px rgba(0,0,0,.65)); }
   #lm-photo > img.on { opacity: 1; }
   /* 左下角小地圖。跑步時要能一眼看出「我在哪、朝哪、下一個景點在哪邊」，
      所以不做互動，只畫：走過的路線、目前位置與朝向、附近景點、目標。 */
@@ -90,7 +94,7 @@
   #lm-text { font-size: 32px; line-height: 1.5; color: #fff; font-weight: 500;
              text-shadow: 0 3px 14px rgba(0,0,0,.98), 0 0 34px rgba(0,0,0,.85); }
   @media (max-height: 700px) {
-    #lm-photo { width: 38vw; max-height: 54vh; }
+    #lm-photo { width: 38vw; height: 24vw; }
     #lm-text { font-size: 26px; }
     #lm-name { font-size: 18px; }
   }
