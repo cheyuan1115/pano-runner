@@ -306,7 +306,26 @@ async function sparqlSpots(lat, lng, km) {
 // 圖示、地圖、旗幟、徽章、SVG、共享資源的通用圖示。要靠檔名與尺寸濾掉。
 const BAD_IMG = /icon|logo|flag|coat[ _]of[ _]arms|symbol|blank|spacer|commons|wiki|edit|ambox|question|disambig|stub|portal|crystal|nuvola|emblem|seal|map|locator|plan|diagram|chart|graph|signature|barnstar|\.svg$|\.ogg$|\.webm$|\.pdf$/i;
 
-export async function moreImages(titles, want = 5) {
+// 英文條目名 → 中文條目名。早期抓的資料 id 存的是英文標題
+// （wiki:Great_Palace_of_Constantinople），拿它去問中文維基一定查不到 ——
+// 伊斯坦堡、維也納、巴塞隆納、布拉格全是那個時期抓的，整批都補不到照片。
+export async function zhTitleOf(enTitles) {
+  const map = new Map();
+  for (const part of chunk(enTitles, 50)) {
+    const j = await api('en.wikipedia.org', {
+      prop: 'langlinks', lllang: 'zh', lllimit: '500', titles: part.join('|'),
+    });
+    for (const p of j.query?.pages || []) {
+      const zh = (p.langlinks || [])[0]?.title;
+      if (zh) map.set(p.title, zh);
+    }
+  }
+  return map;
+}
+
+// host 可以指定 zh 或 en —— 中文條目的圖常常比英文版少很多
+//（實測君士坦丁堡大皇宮中文版只有兩張可用），不夠就去英文版補。
+export async function moreImages(titles, want = 5, host = 'zh.wikipedia.org') {
   const byPage = new Map();
   const files = new Set();
   for (const part of chunk(titles, 20)) {
@@ -315,7 +334,7 @@ export async function moreImages(titles, want = 5) {
     //（實測八個景點只有第一個拿到六張，其餘都只有主圖）。
     let cont = null;
     for (let round = 0; round < 6; round++) {
-      const j = await api('zh.wikipedia.org', {
+      const j = await api(host, {
         prop: 'images', imlimit: '500', titles: part.join('|'),
         ...(cont ? { imcontinue: cont } : {}),
       });
@@ -335,7 +354,7 @@ export async function moreImages(titles, want = 5) {
   // 檔名 → 縮圖網址（順便拿尺寸，太小的是裝飾用圖）
   const url = new Map();
   for (const part of chunk([...files], 50)) {
-    const j = await api('zh.wikipedia.org', {
+    const j = await api(host, {
       prop: 'imageinfo', iiprop: 'url|size', iiurlwidth: '1200', titles: part.join('|'),
     });
     for (const p of j.query?.pages || []) {

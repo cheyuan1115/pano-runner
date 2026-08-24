@@ -12,7 +12,7 @@
 import { readdir, readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { moreImages, tune, throttleState } from '../wiki.mjs';
+import { moreImages, zhTitleOf, tune, throttleState } from '../wiki.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const WIKI = join(HERE, '..', '.wikicache');
@@ -33,17 +33,38 @@ for (const [i, f] of files.entries()) {
   try { o = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
   const need = (o.items || []).filter(x => (x.photos || []).length < want);
   if (!need.length) continue;
-  // id 是 wiki:<中文標題編碼>，還原回標題
-  const titles = need.map(x => {
+  // id 有兩種：新的是 wiki:<中文標題編碼>，早期的是 wiki:<英文標題>
+  //（wiki:Great_Palace_of_Constantinople）。拿英文的去問中文維基一定查不到 ——
+  // 伊斯坦堡、維也納、巴塞隆納、布拉格全是早期抓的，整批都補不到照片。
+  const raw = need.map(x => {
     try { return decodeURIComponent(String(x.id).replace(/^wiki:/, '')); }
     catch { return x.name; }
   });
+  const isEn = t => !/[\u4e00-\u9fff]/.test(t);
+  const enOnes = [...new Set(raw.filter(isEn).map(t => t.replace(/_/g, ' ')))];
+  let en2zh = new Map();
+  if (enOnes.length) { try { en2zh = await zhTitleOf(enOnes); } catch {} }
+  const titles = raw.map((t, k) =>
+    isEn(t) ? (en2zh.get(t.replace(/_/g, ' ')) || need[k].name) : t);
   let got = null;
   for (let t = 0; t < 3 && !got; t++) {
     try { got = await moreImages(titles, 6); }
     catch (e) { await sleep(15000 * (t + 1)); }
   }
   if (!got) { console.log(`\n  ${f} 三次都失敗，跳過`); continue; }
+  // 中文條目的圖常常只有一兩張，不夠就去英文版補
+  const thinEn = [...new Set(raw.filter((t, k) => isEn(t) && (got.get(titles[k]) || []).length < want)
+                                .map(t => t.replace(/_/g, ' ')))];
+  if (thinEn.length) {
+    try {
+      const more = await moreImages(thinEn, 6, 'en.wikipedia.org');
+      raw.forEach((t, k) => {
+        if (!isEn(t)) return;
+        const ex = more.get(t.replace(/_/g, ' ')) || [];
+        if (ex.length) got.set(titles[k], (got.get(titles[k]) || []).concat(ex));
+      });
+    } catch {}
+  }
   let dirty = false;
   const base = u => (u || '').split('/').pop().replace(/^\d+px-/, '').split('?')[0];
   for (const [k, x] of need.entries()) {
