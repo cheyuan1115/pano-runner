@@ -669,10 +669,25 @@ function micSpeed() {
 //   below   樓層標籤是 B1、B2、地下…
 // 2026-08-23 實測東京站周邊 60 顆全景，三個訊號都是 100% 命中。
 // 官方 API 的 source=outdoor 參數不能用 —— Google 把新宿站內部歸類為戶外。
-const isIndoor = m => !!(m && (m.indoor || m.below || (m.source && m.source !== 'launch')));
+// 軌道模式（S.rail）不做室內判定 —— 軌道是預先驗證過的路線，而且
+// 賞櫻步道多是腳架拍的（source = scout），會被「非街景車＝室內」誤殺：
+// 實測造幣局的櫻花隧道跑到 35 公尺就被這裡當成地下街，
+// 用座標傳送到外面的馬路（2015/3，整條沒花）。
+const isIndoor = m => !S.rail && !!(m && (m.indoor || m.below || (m.source && m.source !== 'launch')));
 
 function pickLink(meta, dir, wish) {
   if (!meta.links.length) return null;
+  // 軌道模式：驗證過的路線照表走，不做任何啟發式選路。
+  // 櫻花路線一定要用這個 —— 同一段路常有兩條不同年代的採集交錯勾連，
+  // 靠方位選路會被接到沒花的那條（實測造幣局 2012/4 與 2015/3 互跳）。
+  if (S.rail) {
+    const i = S.rail.indexOf(meta.pano);
+    if (i >= 0 && i + 1 < S.rail.length) {
+      const nx = meta.links.find(l => l.id === S.rail[i + 1]);
+      if (nx) return nx;
+    }
+    return null;                        // 軌道走完 → 上層自然結束這一趟
+  }
   // 「不要往回走」一定要用實際行進方向（傳進來的 dir），不是目標方位。
   // 用目標方位的話，一旦目標在側面，來路就不會被濾掉 —— 會在兩顆全景之間
   // 來回震盪（實測 200 步只前進 318 公尺）。離線模擬顯示修好之後，
@@ -687,6 +702,11 @@ function pickLink(meta, dir, wish) {
   // 那代表我們已經在地下街裡，交給下面的脫困處理。
   const out = cand.filter(l => !indoorIds.has(l.id));
   if (out.length) cand = out;
+  // 櫻花模式：被驗出「會離開春天年代」的連結也濾掉（見 fillLoop 的回退）
+  if (eraAvoid.size) {
+    const inEra = cand.filter(l => !eraAvoid.has(l.id));
+    if (inEra.length) cand = inEra;
+  }
   if (wish === 'left' || wish === 'right') {
     const sign = wish === 'left' ? -1 : 1;
     // 想轉的那一側、而且偏離直行至少 35° 的岔路
@@ -738,6 +758,8 @@ async function escapeIndoor(meta) {
 // 加一層純粹是買緩衝，穩定的地方也不會多花（總量一樣，只是提早抓）。
 const DEPTH = 3;
 let queue = [];
+// 櫻花模式：已知「走過去會離開春天年代」的連結。上限 40，免得整區都被拉黑。
+const eraAvoid = new Set();
 // 填充不可重入，而且要能作廢。轉向時會 dropQueue + fillQueue，如果原本那個
 // 填充迴圈還在跑，兩邊會同時抓磚塊互搶頻寬 —— 實測等預抓從每步 39 ms
 // 暴增到累積 35 秒，跑步變成 2 km/h。
@@ -764,6 +786,18 @@ async function fillLoop() {
       await last.done;                       // 要有它的中繼資料才知道下一條連結
       if (ep !== qEpoch) return;
       if (!last.P.meta) return;
+      // 櫻花模式的年代黏著：連結圖在路口會跨年代相連，選路只看方位不知道
+      // 年代 —— 實測造幣局的櫻花隧道跑兩步就被接到 2015/3 的無花鏈。
+      // 預抓完才知道日期：上一顆是四月、這顆不是 → 拉黑這條連結、退掉重選。
+      if (S.season === 'sakura' && eraAvoid.size < 40) {
+        const prevM = queue.length >= 2 ? queue[queue.length - 2].P.meta : S.cur?.meta;
+        if (prevM?.date?.[1] === 4 && last.P.meta.date && last.P.meta.date[1] !== 4) {
+          eraAvoid.add(last.link.id);
+          last.P.dead = true;
+          queue.pop();
+          continue;                          // 用前一顆的 meta 重新挑連結
+        }
+      }
       meta = last.P.meta; dir = last.link.heading;
     } else {
       if (!S.cur?.meta) return;
@@ -2139,6 +2173,14 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('voice') === '1') S.voice = true;
   if (q.get('hud') === '0') { hud.style.display = 'none'; document.getElementById('keys').style.display = 'none'; }
   let pano = q.get('pano');
+  // 軌道路線（rails.json 裡預先驗證過的 pano 順序）
+  if (q.get('rail')) {
+    try {
+      const rails = await (await fetch('/rails.json')).json();
+      const r = rails[q.get('rail')];
+      if (r && r.ids && r.ids.length) { S.rail = r.ids; if (!pano) pano = r.ids[0]; }
+    } catch {}
+  }
   if (!pano) {
     const ll = q.get('ll') || '35.52326,138.74587';       // 預設：大石公園
     const f = await (await fetch('/api/find?ll=' + encodeURIComponent(ll))).json();
@@ -2149,7 +2191,13 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   // 先前是「用朝向 0 載一次、再用真朝向載一次」，等於把起動的等待時間加倍。
   const m0 = await (await fetch('/api/meta?pano=' + encodeURIComponent(pano))).json();
   if (m0.error) { hud.textContent = m0.error; return; }
-  S.heading = q.has('head') ? +q.get('head')
+  if (S.rail) {
+    const i = S.rail.indexOf(pano);
+    const nx = i >= 0 ? m0.links.find(l => l.id === S.rail[i + 1]) : null;
+    if (nx) { S.heading = nx.heading; S.travelDir = nx.heading; }
+  }
+  S.heading = (S.rail && S.travelDir != null && q.get('rail')) ? S.heading
+            : q.has('head') ? +q.get('head')
     : (m0.links.length ? m0.links[0].heading : m0.yaw);
   S.travelDir = S.heading;
   S.cur = mkPano();

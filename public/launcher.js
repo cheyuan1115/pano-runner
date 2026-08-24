@@ -324,7 +324,15 @@ async function search() {
 el('go').onclick = search;
 el('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
 
+// 第五個元素（可選）：字串 = 直接起跑的網址參數。
+// 🌸 兩條是實際驗證過「畫面裡有滿開櫻花」的官方採集，
+// 用 pano= 直接從驗證過的那顆出發 —— 用 ll= 會吸到外面的馬路
+//（實測吸去 2015/3 的鏈，整條沒花）：
+//   造幣局「桜の通り抜け」2012/4 腳架拍，60+ 顆相連約 300 公尺
+//   千鳥ヶ淵 2019/4 綠道
 const QUICK = [
+  ['🌸大阪造幣局', 34.69571, 135.52176, 17, 'rail=mint&season=sakura'],
+  ['🌸千鳥ヶ淵', 35.68993, 139.74772, 16, 'rail=chidori&season=sakura'],
   ['香榭麗舍', 48.8698, 2.3078, 16],
   ['塞納河畔', 48.8566, 2.3450, 16],
   ['河口湖大石公園', 35.5233, 138.7459, 16],
@@ -336,7 +344,15 @@ el('quick').innerHTML = QUICK.map((q, i) => `<span data-i="${i}">${q[0]}</span>`
 el('quick').onclick = e => {
   const i = e.target.dataset.i;
   if (i === undefined) return;
-  const [, lat, lng, z] = QUICK[i];
+  const [, lat, lng, z, opt] = QUICK[i];
+  if (typeof opt === 'string' && (opt.includes('pano=') || opt.includes('rail='))) {
+    // 驗證過的路線：直接起跑，速度沿用畫面上的設定
+    location.href = '/run.html?' + opt + '&kmh=' + (el('kmh').value || 12)
+      + '&panels=1&proj=pan&zoom=4&run=1'
+      + (el('voice').checked ? '&voice=1' : '&voice=0')
+      + (el('narrate').checked ? '&narrate=1' : '&narrate=0');
+    return;
+  }
   V.lat = lat; V.lng = lng; V.z = z;
   pts = []; shown = null;
   drawMap(); say();
