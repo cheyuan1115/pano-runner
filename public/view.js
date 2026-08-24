@@ -402,10 +402,13 @@ async function load(P, panoId, heading) {
     const raw = await fetchTile(panoId, x, y, BASE_ZOOM);
     if (!raw || P.dead) return;
     const bm = upscale(raw, TSb);
-    gl.bindTexture(gl.TEXTURE_2D, P.texBase);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, x * TSb, y * TSb, gl.RGBA, gl.UNSIGNED_BYTE, bm);
-    if (bm.close) bm.close();
-    if (P === S.cur) draw();          // 邊載邊畫 —— 少了這行就要等整顆載完才有畫面
+    uploadTile(() => {
+      if (P.dead) { if (bm.close) bm.close(); return; }
+      gl.bindTexture(gl.TEXTURE_2D, P.texBase);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, x * TSb, y * TSb, gl.RGBA, gl.UNSIGNED_BYTE, bm);
+      if (bm.close) bm.close();
+      if (P === S.cur) draw();        // 邊載邊畫 —— 少了這行就要等整顆載完才有畫面
+    });
   });
 
   const w = tileWindow(meta, heading), TS = w.TS;
@@ -421,11 +424,14 @@ async function load(P, panoId, heading) {
     const raw = await fetchTile(panoId, (w.cx0 + i) % w.cols, w.cy0 + j, S.zoom);
     if (!raw || P.dead) return;
     const bm = upscale(raw, TS);
-    gl.bindTexture(gl.TEXTURE_2D, P.texDet);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, i * TS, j * TS, gl.RGBA, gl.UNSIGNED_BYTE, bm);
-    if (bm.close) bm.close();
-    P.tiles++;
-    if (P === S.cur) draw();
+    uploadTile(() => {
+      if (P.dead) { if (bm.close) bm.close(); return; }
+      gl.bindTexture(gl.TEXTURE_2D, P.texDet);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, i * TS, j * TS, gl.RGBA, gl.UNSIGNED_BYTE, bm);
+      if (bm.close) bm.close();
+      P.tiles++;
+      if (P === S.cur) draw();
+    });
   });
   return true;
 }
@@ -776,6 +782,10 @@ async function stepOnce() {
   const { link, P, done } = queue.shift();
   const t0 = performance.now();
   const ok = await done;                       // 預抓成功的話這裡幾乎不等
+  // VR 中磚塊是限速貼的（一幀兩塊）。轉彎會作廢預抓、新全景現載，
+  // 這時佇列還沒消化完就換過去的話，畫面會出現黑塊／糊塊 —— 那就是
+  // 「轉彎時特別會閃」。換之前把這顆剩下的磚一次貼完，寧可一小頓。
+  if (xr.session) pumpUploads(1e9);
   S.lastMs = performance.now() - t0;
   S.waited += S.lastMs;
   if (!ok) { S.note = '⚠ 下一顆載不起來'; S.running = false; return; }
@@ -805,7 +815,9 @@ async function stepOnce() {
   // 溶解只壓在中間這一小段。兩顆全景在轉場中都被扭曲（誤差隨平移量變大），
   // 同時各佔一半的時候重影最重 —— 所以讓大部分時間只看到其中一顆，
   // 中間快速交換。這就是你說的「先推近、再切」，只是切的那一下用溶解接。
-  const DISS = Math.min(0.5, S.dissolveMs / span);
+  // VR 裡溶解要短。溶解期間兩顆全景同時可見，立體下那是雙影 ——
+  // 每一步閃一次殘像，正是「有時候會閃」的節奏（步距/速度 ≈ 每兩三秒一次）。
+  const DISS = Math.min(0.5, (xr.session ? 90 : S.dissolveMs) / span);
   const startHead = S.heading, aimHead = link.heading;
   let frames = 0;
   await new Promise(res => {
@@ -818,7 +830,7 @@ async function stepOnce() {
       S.mix = Math.max(0, Math.min(1, (k - (0.5 - DISS / 2)) / DISS));
       // 只有轉向才需要平滑進出
       const e = k * k * (3 - 2 * k);
-      if (S.watchLm && S.cur && S.cur.meta) {
+      if (S.watchLm && !xr.session && S.cur && S.cur.meta) {
         // 播報中：視角追著景點跑。位置一直在變，所以每一格重算方位；
         // 用比例逼近而不是直接指過去，才不會在經過它的瞬間甩頭。
         const want = bearingTo(S.cur.meta, S.watchLm);
@@ -1293,6 +1305,18 @@ setInterval(() => {
   } else S.speakOffAt = 0;
 }, 500);
 
+// VR 中貼磚塊要限速。texSubImage2D 一塊 512² 約 1MB，預抓下一顆全景時
+// 幾十塊會在同幾格畫面裡湧進來 —— 主執行緒一忙，XR 就掉幀，頭盔裡就是抖。
+// 排隊、每個 XR 幀最多貼兩塊。不在 VR 時直接貼（平面模式沒有 90Hz 的壓力）。
+const upQ = [];
+function uploadTile(fn) {
+  if (!xr.session) { fn(); return; }
+  upQ.push(fn);
+}
+function pumpUploads(budget = 2) {
+  while (budget-- > 0 && upQ.length) { try { upQ.shift()(); } catch {} }
+}
+
 // ── VR（WebXR）─────────────────────────────────────────────
 // 只有在 https 下 navigator.xr 才存在（Quest 的瀏覽器開 http 時直接是 undefined）。
 // 進 VR 之後：方向交給頭盔（uEyeM／uInvP），前進方向仍然是 S.travelDir ——
@@ -1321,6 +1345,7 @@ async function enterVR() {
       .catch(() => ses.requestReferenceSpace('local'));
     ses.addEventListener('end', () => {
       xr.session = null;
+      pumpUploads(1e9);                // 排隊中的磚塊全部貼完，不然畫面停在半張
       const b = $('vrbtn'); if (b) b.textContent = 'VR';
       draw();
     });
@@ -1331,8 +1356,9 @@ async function enterVR() {
 }
 
 // mat4 反矩陣（給投影矩陣用）。WebGL1 沒有 inverse()，只能自己算。
+const _inv = new Float32Array(16);
 function inv4(m) {
-  const inv = new Float32Array(16);
+  const inv = _inv;
   inv[0] = m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
   inv[4] = -m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
   inv[8] = m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
@@ -1356,16 +1382,19 @@ function inv4(m) {
   return inv;
 }
 
+const eyeM9 = new Float32Array(9);       // 每幀重複用，不要讓 GC 有事做
 function xrFrame(t, frame) {
   const ses = xr.session;
   if (!ses) return;
   ses.requestAnimationFrame(xrFrame);
-  const pose = frame.getViewerPose(xr.refSpace);
-  if (!pose || !S.cur || !S.cur.meta) return;
-
+  pumpUploads(2);                        // 磚塊限速貼，一幀最多兩塊
   gl.bindFramebuffer(gl.FRAMEBUFFER, xr.layer.framebuffer);
   gl.clearColor(0.05, 0.055, 0.065, 1);
   gl.clear(gl.COLOR_BUFFER_BIT);
+  const pose = frame.getViewerPose(xr.refSpace);
+  // 姿態偶爾會拿不到一兩幀 —— 也要把畫面清乾淨再走，
+  // 不清的話合成器拿到舊幀，看起來就是閃一下
+  if (!pose || !S.cur || !S.cur.meta) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); return; }
   gl.uniform1f(U('uVR'), 1);
   gl.uniform1f(U('uCyl'), 0);
   gl.uniform1f(U('uPitch'), 0);
@@ -1379,8 +1408,10 @@ function xrFrame(t, frame) {
     gl.uniformMatrix4fv(U('uInvP'), false, inv4(view.projectionMatrix));
     // transform.matrix 是「眼睛 → 世界」的剛體矩陣，取旋轉那 3x3
     const m = view.transform.matrix;
-    gl.uniformMatrix3fv(U('uEyeM'), false,
-      [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
+    eyeM9[0] = m[0]; eyeM9[1] = m[1]; eyeM9[2] = m[2];
+    eyeM9[3] = m[4]; eyeM9[4] = m[5]; eyeM9[5] = m[6];
+    eyeM9[6] = m[8]; eyeM9[7] = m[9]; eyeM9[8] = m[10];
+    gl.uniformMatrix3fv(U('uEyeM'), false, eyeM9);
     drawOne(S.cur, 1, 1, 1, S.tMove, 0, 0);
     if (S.mix > 0 && S.nxt && S.nxt.meta) {
       gl.uniform1f(U('uYaw'), rad(S.heading - S.nxt.meta.yaw));
