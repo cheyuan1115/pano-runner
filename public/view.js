@@ -816,9 +816,12 @@ async function stepOnce() {
   // 同時各佔一半的時候重影最重 —— 所以讓大部分時間只看到其中一顆，
   // 中間快速交換。這就是你說的「先推近、再切」，只是切的那一下用溶解接。
   // VR 裡溶解要短。溶解期間兩顆全景同時可見，立體下那是雙影 ——
-  // 每一步閃一次殘像，正是「有時候會閃」的節奏（步距/速度 ≈ 每兩三秒一次）。
-  const DISS = Math.min(0.5, (xr.session ? 90 : S.dissolveMs) / span);
+  // 每一步閃一次殘像。而**轉彎時**前後兩顆的視角差很大，兩張差異巨大的圖
+  // 疊 90ms 看起來就是畫面閃一下 —— 轉彎角度大就不溶解，直接硬切。
   const startHead = S.heading, aimHead = link.heading;
+  const turnAng = Math.abs(ad(aimHead, startHead));
+  const DISS = Math.min(0.5,
+    (xr.session ? (turnAng > 25 ? 8 : 90) : S.dissolveMs) / span);
   let frames = 0;
   await new Promise(res => {
     const t = performance.now();
@@ -836,11 +839,12 @@ async function stepOnce() {
         const want = bearingTo(S.cur.meta, S.watchLm);
         S.heading += ad(want, S.heading) * Math.min(1, 0.06 + 2.5 / span * 16);
       } else if (xr.session) {
-        // VR：轉彎用瞬切（snap turn），不播旋轉動畫。
-        // 「世界在眼前轉、身體沒有轉」是頭盔裡最典型的暈眩與抖動感來源 ——
-        // 路線轉 90 度時螢幕上很順的那段旋轉，在 VR 裡就是災難。
-        // 瞬切是 VR 暈眩設計的標準做法。
-        S.heading = aimHead;
+        // VR：轉彎用瞬切（snap turn），不播旋轉動畫 ——
+        // 「世界在眼前轉、身體沒有轉」是頭盔裡最典型的暈眩來源。
+        // 而且瞬切要跟全景切換**同一瞬間**發生（溶解中點 k=0.5）。
+        // 分開跳的話（開始時轉頭、中段換位置）一步之內畫面跳兩次，
+        // 路口連續幾步看起來就是「兩個不同的畫面來回閃動」。
+        S.heading = k < 0.5 ? startHead : aimHead;
       } else {
         S.heading = startHead + ad(aimHead, startHead) * e;
       }
