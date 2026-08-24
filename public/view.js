@@ -1559,11 +1559,11 @@ function mmvrInit() {
   // (角落也不行 —— 眼緩衝區邊角不在鏡片可視圈裡,畫了看不到。)
   const vs = `attribute vec2 aPos; uniform mat4 uP; uniform float uEyeOff; varying vec2 vUV;
     void main(){ vUV = vec2(aPos.x, 1.0 - aPos.y);
-      vec3 p = vec3((aPos.x - 0.5) * 0.55 + uEyeOff,
-                    (aPos.y - 0.5) * 0.55 - 0.52, -1.35);
+      vec3 p = vec3((aPos.x - 0.5) * 0.48 - 0.55 + uEyeOff,
+                    (aPos.y - 0.5) * 0.48 - 0.42, -1.35);
       gl_Position = uP * vec4(p, 1.0); }`;
   const fs = `precision mediump float; varying vec2 vUV; uniform sampler2D uTex;
-    void main(){ vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb, c.a * 0.92); }`;
+    void main(){ vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb, c.a * 0.62); }`;
   const c2 = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src);
     gl.compileShader(sh);
     if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
