@@ -26,8 +26,8 @@ const UA = 'pano-runner/1.0 (personal virtual-running project)';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // 批次抓的時候不趕時間，退避調大一點，成功率換速度
-tune.retryMs = 6000;
-tune.gapMs = 700;
+tune.retryMs = 5000;
+tune.gapMs = 400;
 
 const [name, latS, lngS, kmS] = process.argv.slice(2);
 if (!name || !latS || !lngS) {
@@ -69,7 +69,7 @@ for (const [la, ln] of cells) {
       await writeFile(f, JSON.stringify({ at: Date.now(), items }));
       done++;
     } catch (e) { failed.push([k, la, ln, String(e.message || e)]); items = []; }
-    await sleep(3000);                       // 每格之間停三秒，這是穩不穩的關鍵
+    await sleep(800);   // SPARQL 一格只打一到三次 API，不用停那麼久
   }
   for (const it of items) all.set(it.id, it);
   process.stdout.write(`\r  格子 ${done + cached + failed.length}/${cells.length}　`

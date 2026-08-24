@@ -19,6 +19,26 @@ const UA = 'pano-runner/1.0 (personal virtual-running project)';
 const nap = ms => new Promise(r => setTimeout(r, ms));
 // 被限流之後要退多久。批次抓的時候可以調大（tools/warm-wiki.mjs 會設）。
 export const tune = { retryMs: 3000, gapMs: 300 };
+
+// **全域節流。** 所有維基呼叫（不管哪一支工具、哪一個端點）共用一個間隔 ——
+// 先前每支工具各自控速，同時跑兩支就互相打架，一整晚都在撞限流。
+// 撞到就把間隔加倍，順利就慢慢放鬆，讓它自己找到維基能接受的速度。
+const T = { gap: 900, min: 700, max: 20000, last: 0, hits: 0, calls: 0 };
+export const throttleState = () => ({ ...T });
+async function gate() {
+  const wait = T.last + T.gap - Date.now();
+  if (wait > 0) await nap(wait);
+  T.last = Date.now();
+  T.calls++;
+}
+function limited() {
+  T.hits++;
+  T.gap = Math.min(T.max, Math.round(T.gap * 2));
+}
+function fine() {
+  // 每順利十次放鬆一成，不要一次放太多
+  if (T.calls % 10 === 0) T.gap = Math.max(T.min, Math.round(T.gap * 0.9));
+}
 const api = async (host, params) => {
   const u = `https://${host}/w/api.php?` + new URLSearchParams(
     // formatversion 2：pages 是陣列（1 是以 pageid 為鍵的物件），
@@ -38,6 +58,7 @@ const api = async (host, params) => {
 const api2 = async (host, params) => {
   const u = `https://${host}/w/api.php?` + new URLSearchParams(
     { format: 'json', formatversion: '2', ...params }).toString();
+  await gate();
   const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15000) });
   const b = await r.text();
   if (!r.ok || /^\s*You are making too many requests/i.test(b)) throw new Error('限流');
@@ -206,13 +227,201 @@ async function qidTitles(qids) {
   return map;
 }
 
+// Wikidata 的 SPARQL：**一次查詢**就拿到「附近有座標、有中文條目、而且是地點」
+// 的所有項目，連圖片和語言版本數都一起給。
+// 先前的做法是 geosearch + Overpass + langlinks + pageviews + P31 過濾，
+// 一格要打 12 到 16 次 API —— 35 格一個城市就是四五百次，跑三個城市就撐不住。
+// 換成這個之後一格只要一次，實測 3 秒回 25 個景點。
+const PLACE_QIDS = [
+  'Q41176',   // 建築物
+  'Q16970',   // 教堂
+  'Q33506',   // 博物館
+  'Q23413',   // 城堡
+  'Q16560',   // 宮殿
+  'Q22698',   // 公園
+  'Q174782',  // 廣場
+  'Q12280',   // 橋
+  'Q4989906', // 紀念碑
+  'Q811979',  // 建築結構
+  'Q57821',   // 要塞
+  'Q1497364', // 建築群
+  'Q2977',    // 主教座堂
+  'Q44539',   // 神廟
+  'Q34627',   // 猶太會堂
+  'Q32815',   // 清真寺
+  'Q24398318',// 宗教建築
+  'Q1802963', // 修道院
+  'Q483110',  // 體育場
+  'Q11315',   // 購物中心
+  'Q207694',  // 美術館
+  'Q3947',    // 住宅
+  'Q55488',   // 火車站
+  'Q1244442', // 學校建築
+  'Q39614',   // 墓園
+  'Q17715832',// 塔
+  'Q2087181', // 歷史建築
+  'Q159313',  // 都市計畫區
+  'Q3914',    // 學校
+  'Q133311',  // 陵墓
+  'Q570116',  // 觀光景點
+  'Q839954',  // 考古遺址
+  'Q2087181', // 歷史建築
+].map(q => 'wd:' + q).join(' ');
+
+async function sparqlSpots(lat, lng, km) {
+  const q = `SELECT ?zh ?lat ?lon ?img (COUNT(DISTINCT ?site) AS ?links) WHERE {
+  SERVICE wikibase:around {
+    ?item wdt:P625 ?coord .
+    bd:serviceParam wikibase:center "Point(${lng} ${lat})"^^geo:wktLiteral .
+    bd:serviceParam wikibase:radius "${km}" .
+  }
+  ?art schema:about ?item ; schema:isPartOf <https://zh.wikipedia.org/> ; schema:name ?zh .
+  ?item wdt:P31 ?type . VALUES ?type { ${PLACE_QIDS} }
+  OPTIONAL { ?item wdt:P18 ?img }
+  ?site schema:about ?item .
+  ?item p:P625/psv:P625 ?cv . ?cv wikibase:geoLatitude ?lat ; wikibase:geoLongitude ?lon .
+} GROUP BY ?zh ?lat ?lon ?img ORDER BY DESC(?links) LIMIT 80`;
+  const r = await fetch('https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(q),
+    { headers: { 'User-Agent': UA, Accept: 'application/sparql-results+json' },
+      signal: AbortSignal.timeout(60000) });
+  if (!r.ok) throw new Error('SPARQL HTTP ' + r.status);
+  const rows = (await r.json()).results.bindings;
+  // 同一個項目可能有多組座標，取第一組
+  const seen = new Map();
+  for (const b of rows) {
+    const zh = b.zh.value;
+    if (seen.has(zh)) continue;
+    seen.set(zh, {
+      zh, lat: +b.lat.value, lng: +b.lon.value,
+      links: +b.links.value,
+      img: b.img?.value || null,
+      dist: haversine(lat, lng, +b.lat.value, +b.lon.value),
+    });
+  }
+  return [...seen.values()];
+}
+
+// 條目主圖只有一張，播報一段兩三分鐘只看一張太單調。
+// prop=images 可以拿到條目裡用到的**所有**圖片，但裡面混著一堆不能看的：
+// 圖示、地圖、旗幟、徽章、SVG、共享資源的通用圖示。要靠檔名與尺寸濾掉。
+const BAD_IMG = /icon|logo|flag|coat[ _]of[ _]arms|symbol|blank|spacer|commons|wiki|edit|ambox|question|disambig|stub|portal|crystal|nuvola|emblem|seal|map|locator|plan|diagram|chart|graph|signature|barnstar|\.svg$|\.ogg$|\.webm$|\.pdf$/i;
+
+export async function moreImages(titles, want = 5) {
+  const byPage = new Map();
+  const files = new Set();
+  for (const part of chunk(titles, 20)) {
+    // imlimit 是**整個查詢**的上限，不是每一頁的 —— 不跟著 continue 拿的話
+    // 只有前面一兩個條目會拿到圖片，後面全部被截斷
+    //（實測八個景點只有第一個拿到六張，其餘都只有主圖）。
+    let cont = null;
+    for (let round = 0; round < 6; round++) {
+      const j = await api('zh.wikipedia.org', {
+        prop: 'images', imlimit: '500', titles: part.join('|'),
+        ...(cont ? { imcontinue: cont } : {}),
+      });
+      for (const p of j.query?.pages || []) {
+        const list = (p.images || []).map(i => i.title)
+          .filter(t => !BAD_IMG.test(t) && /\.(jpe?g|png)$/i.test(t));
+        if (!list.length) continue;
+        byPage.set(p.title, (byPage.get(p.title) || []).concat(list));
+        list.forEach(f => files.add(f));
+      }
+      cont = j.continue?.imcontinue;
+      await nap(tune.gapMs);
+      if (!cont) break;
+    }
+  }
+  if (!files.size) return byPage;
+  // 檔名 → 縮圖網址（順便拿尺寸，太小的是裝飾用圖）
+  const url = new Map();
+  for (const part of chunk([...files], 50)) {
+    const j = await api('zh.wikipedia.org', {
+      prop: 'imageinfo', iiprop: 'url|size', iiurlwidth: '1200', titles: part.join('|'),
+    });
+    for (const p of j.query?.pages || []) {
+      const ii = (p.imageinfo || [])[0];
+      if (!ii) continue;
+      if ((ii.width || 0) < 640 || (ii.height || 0) < 400) continue;   // 裝飾用小圖
+      url.set(p.title, ii.thumburl || ii.url);
+    }
+    await nap(tune.gapMs);
+  }
+  const out = new Map();
+  for (const [page, list] of byPage)
+    out.set(page, list.map(f => url.get(f)).filter(Boolean).slice(0, want));
+  return out;
+}
+
 // 逐句切開當字幕用
 const sentences = t => (t.match(/[^。！？!?]+[。！？!?]?/g) || []).map(s => s.trim()).filter(s => s.length > 1);
 
 export async function wikiNearby(lat, lng, {
-  radius = 1200, minViews = 250, limit = 12, minChars = 60,
+  radius = 1200, minLinks = 3, limit = 12, minChars = 60,
 } = {}) {
-  // 1. 英文維基找座標
+  let cand = [];
+  try {
+    cand = await sparqlSpots(lat, lng, Math.max(0.5, radius / 1000));
+  } catch (e) {
+    // SPARQL 掛了就退回舊的做法（慢很多，但至少有東西）
+    return legacyNearby(lat, lng, { radius, limit, minChars });
+  }
+  // 語言版本數當熱門度。先前用 60 天瀏覽量比較準，但那要另外打好幾次 API ——
+  // SPARQL 順手就給語言版本數，省下的呼叫次數比準度值錢。
+  cand = cand.filter(c => c.links >= minLinks && c.dist <= radius)
+             .sort((a, b) => b.links - a.links)
+             .slice(0, limit * 2);
+  if (!cand.length) return [];
+
+  const out = [];
+  // 先一次把所有條目的圖片問出來
+  let extra = new Map();
+  try { extra = await moreImages(cand.map(c => c.zh)); } catch {}
+  for (const part of chunk(cand, 20)) {
+    const j = await api('zh.wikipedia.org', {
+      variant: 'zh-tw', converttitles: '1',
+      prop: 'extracts|pageimages', exintro: '1', explaintext: '1',
+      piprop: 'thumbnail|original', pithumbsize: '1200',
+      titles: part.map(c => c.zh).join('|'),
+    });
+    await nap(tune.gapMs);
+    const pages = j.query?.pages || [];
+    const meta = new Map(pages.map(p => [p.title, p]));
+    for (const c of part) {
+      const p = meta.get(c.zh) || pages.find(x => x.pageid && !x.__used);
+      if (!p) continue;
+      p.__used = true;
+      const body = clean(p.extract);
+      if (body.length < minChars) continue;
+      let name = nameFrom(body, c.zh);
+      if (looksBad(name)) { await nap(tune.gapMs); name = await displayTitle(c.zh); }
+      if (/^\d|事件|槍擊|襲擊|攻擊|爆炸|暴動|戰役|地震|空難|大火|疫情/.test(name)) continue;
+      if (/都會區|都市圈|自治市|行政區$|地區$|縣$|州$|省$|大區$/.test(name)) continue;
+      // 世界遺產名錄本身也掛著座標（實測阿姆斯特丹排第一名的就是它）
+      if (/世界遺產|文化遺產|名錄|列表$/.test(name)) continue;
+      // 主圖排第一，條目內的其他圖片接在後面（去掉重複的）
+      const photos = [];
+      if (p.thumbnail?.source) photos.push(p.thumbnail.source);
+      else if (c.img) photos.push(c.img);
+      const base = u => (u || '').split('/').pop().replace(/^\d+px-/, '');
+      for (const u of extra.get(c.zh) || []) {
+        if (photos.length >= 6) break;
+        if (!photos.some(x => base(x) === base(u))) photos.push(u);
+      }
+      out.push({
+        id: 'wiki:' + encodeURIComponent(c.zh),
+        name, city: '', cat: 'wiki', src: 'wiki',
+        lat: c.lat, lng: c.lng, dist: c.dist, views: c.links,
+        len: body.length, script: body, lines: sentences(body), marks: [], photos,
+      });
+    }
+  }
+  return out.slice(0, limit);
+}
+
+// 舊的做法留著當備援 —— SPARQL 服務偶爾會 502（實測阿姆斯特丹那次）
+async function legacyNearby(lat, lng, {
+  radius = 1200, minViews = 250, limit = 12, minChars = 60,
+} = {}) {  // 1. 英文維基找座標
   const g = await api('en.wikipedia.org', {
     list: 'geosearch', gscoord: `${lat}|${lng}`, gsradius: String(Math.min(10000, radius)),
     gslimit: '300',
@@ -288,6 +497,8 @@ export async function wikiNearby(lat, lng, {
       // 那是校園槍擊案）與行政區劃（「大巴黎都會區」）。用名稱擋掉。
       if (/^\d|事件|槍擊|襲擊|攻擊|爆炸|暴動|戰役|地震|空難|大火|疫情/.test(name)) continue;
       if (/都會區|都市圈|自治市|行政區$|地區$|縣$|州$|省$|大區$/.test(name)) continue;
+      // 世界遺產名錄本身也掛著座標（實測阿姆斯特丹排第一名的就是它）
+      if (/世界遺產|文化遺產|名錄|列表$/.test(name)) continue;
       const photos = [];
       if (p.thumbnail?.source) photos.push(p.thumbnail.source);
       out.push({
