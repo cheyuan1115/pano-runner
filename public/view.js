@@ -620,6 +620,7 @@ function drawInner() {
          + `${Math.round(hHalfDeg() * 2 * S.panels)}°${S.fit ? '　自動比例' : ''}\n`)
     + (S.panelIdx !== null ? `🖥 ${['左', '中', '右'][S.panelIdx]}片（${S.role === 'master' ? '主控' : '從屬'}）   ` : '')
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
+    + (xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   ` : '')
     + (S.photoFail ? `🖼 照片載不到 ×${S.photoFail}   ` : '')
     + (S.mic ? `🎙 ${window.__cad?.spm ? Math.round(window.__cad.spm) + ' spm' : '聽…'}   ` : '')
     + (S.voice ? `🗣 ${voiceState()}   ` : '')
@@ -851,10 +852,20 @@ async function stepOnce() {
   if (!ok) { S.note = '⚠ 下一顆載不起來'; S.running = false; return; }
   fillQueue();                                 // 不等它，讓它在背景補滿
 
-  if (S.mic) {
-    S.kmh = micSpeed();
-    // 停住的時候不要一直丟出轉場，等腳步聲回來
-    while (S.running && S.kmh < 1.5) { S.note = '⏸ 沒有腳步聲，畫面停住'; draw(); await sleep(400); S.kmh = micSpeed(); }
+  // 手擺速只在「最近有讀到控制器」時生效 —— 放下控制器 2.5 秒後
+  // 回到啟動器設定的固定速度（不然速度會凍在放下前的值）
+  const paceSrc = () => (xr.session && VH.seen && Date.now() - VH.at < 2500) ? 'hand'
+                      : (S.mic ? 'mic' : null);
+  if (paceSrc()) {
+    const read = () => paceSrc() === 'hand'
+      ? Math.min(S.kmhCap || 12, VH.kmh)
+      : micSpeed();
+    S.kmh = read();
+    // 停住的時候不要一直丟出轉場，等訊號回來
+    while (S.running && S.kmh < 1.5 && paceSrc()) {
+      S.note = paceSrc() === 'hand' ? '⏸ 手停了，畫面停住（擺手就走）' : '⏸ 沒有腳步聲，畫面停住';
+      draw(); await sleep(400); S.kmh = read();
+    }
     if (!S.running) return;
     S.note = '';
   }
@@ -1482,6 +1493,44 @@ function vrGaze(pose) {
   } else if (Math.abs(yaw) < 20) { gaze.armed = true; gaze.dir = 0; gaze.n = 0; }
 }
 
+// ── 手擺速 ────────────────────────────────────────────────
+// VR 裡不聽步頻（戴頭盔不會真的跑快，可能只是原地走）——
+// 改成「手擺多快就走多快」：取兩支控制器的移動速率平均，直接映射速度。
+// 手停畫面就停、輕擺慢走、大擺快走，原地走也成立。
+//   平均手速 0.15 m/s 以下 → 停（拿著不動的抖動不算）
+//   0.3 m/s ≈ 3 km/h 散步擺，1.2 m/s ≈ 10 km/h 大擺，上限吃 kmhCap
+const VH = { prev: new Map(), buf: [], kmh: 0, at: 0, seen: false };
+function handPace(frame, t) {
+  const ses = xr.session;
+  if (!ses) return;
+  let sum = 0, n = 0;
+  for (const src of ses.inputSources) {
+    if (!src.gripSpace) continue;
+    const p = frame.getPose(src.gripSpace, xr.refSpace);
+    if (!p) continue;
+    const pos = p.transform.position;
+    const key = src.handedness || 'x';
+    const prev = VH.prev.get(key);
+    if (prev && t > prev.t) {
+      const dt = Math.min(0.1, (t - prev.t) / 1000);
+      const v = Math.hypot(pos.x - prev.x, pos.y - prev.y, pos.z - prev.z) / dt;
+      if (v < 5) { sum += v; n++; }        // 追蹤瞬間跳掉會出現不可能的速度
+    }
+    VH.prev.set(key, { x: pos.x, y: pos.y, z: pos.z, t });
+  }
+  if (!n) return;                          // 沒有控制器就不更新（維持固定速度）
+  VH.seen = true;
+  VH.buf.push({ t, v: sum / n });
+  while (VH.buf.length && t - VH.buf[0].t > 1500) VH.buf.shift();
+  const avg = VH.buf.reduce((a, b) => a + b.v, 0) / VH.buf.length;
+  // 映射：0.15 以下算靜止；之後大致線性，貼齊「輕擺≈3、大擺≈10」
+  const raw = avg < 0.15 ? 0 : Math.min(S.kmhCap || 12, 2 + (avg - 0.15) * 8);
+  // 低通：升快降慢 —— 手一停不要瞬間急煞，緩一秒停下來比較舒服
+  VH.kmh += (raw - VH.kmh) * (raw > VH.kmh ? 0.25 : 0.08);
+  if (VH.kmh < 0.3) VH.kmh = 0;
+  VH.at = Date.now();
+}
+
 const eyeM9 = new Float32Array(9);       // 每幀重複用，不要讓 GC 有事做
 function xrFrame(t, frame) {
   const ses = xr.session;
@@ -1498,6 +1547,7 @@ function xrFrame(t, frame) {
   // 不清的話合成器拿到舊幀，看起來就是閃一下
   if (!pose || !S.cur || !S.cur.meta) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); return; }
   vrGaze(pose);
+  handPace(frame, t);
   gl.uniform1f(U('uVR'), 1);
   gl.uniform1f(U('uCyl'), 0);
   gl.uniform1f(U('uPitch'), 0);
