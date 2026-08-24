@@ -835,6 +835,12 @@ async function stepOnce() {
         // 用比例逼近而不是直接指過去，才不會在經過它的瞬間甩頭。
         const want = bearingTo(S.cur.meta, S.watchLm);
         S.heading += ad(want, S.heading) * Math.min(1, 0.06 + 2.5 / span * 16);
+      } else if (xr.session) {
+        // VR：轉彎用瞬切（snap turn），不播旋轉動畫。
+        // 「世界在眼前轉、身體沒有轉」是頭盔裡最典型的暈眩與抖動感來源 ——
+        // 路線轉 90 度時螢幕上很順的那段旋轉，在 VR 裡就是災難。
+        // 瞬切是 VR 暈眩設計的標準做法。
+        S.heading = aimHead;
       } else {
         S.heading = startHead + ad(aimHead, startHead) * e;
       }
