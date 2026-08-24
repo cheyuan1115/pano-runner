@@ -1396,6 +1396,32 @@ function inv4(m) {
   return inv;
 }
 
+// VR 的指令：頭盔裡沒有鍵盤，Quest 瀏覽器全系列也沒有語音辨識 API
+// （麥克風硬體在，但辨識功能沒做）—— 改用「看」來下指令：
+//   看向左／右超過 45 度、持續約 0.7 秒 → 下個路口轉那邊
+//   （回正到 20 度內才重新武裝，看風景的短暫一瞥不會誤觸）
+//   詢問導覽時，盯著景點方向約 1 秒 → 等於說「導覽」
+const gaze = { armed: true, dir: 0, n: 0, gN: 0 };
+function vrGaze(pose) {
+  const m = pose.transform.matrix;
+  const yaw = Math.atan2(-m[8], -m[10]) * 180 / Math.PI;   // 頭的偏轉，右為正
+  // 詢問中：盯著景點就是答應
+  if (S.asking && S.cur && S.cur.meta) {
+    const head = ((S.heading + yaw) % 360 + 360) % 360;
+    if (Math.abs(ad(bearingTo(S.cur.meta, S.asking), head)) < 25) {
+      if (++gaze.gN > 70) { gaze.gN = 0; window.__turn('guide', '盯著景點'); }
+    } else gaze.gN = 0;
+  } else gaze.gN = 0;
+  // 轉向
+  if (gaze.armed) {
+    const d = yaw > 45 ? 1 : yaw < -45 ? -1 : 0;
+    if (d && d === gaze.dir) {
+      if (++gaze.n > 50) { gaze.n = 0; gaze.armed = false;
+        window.__turn(d > 0 ? 'right' : 'left', '頭轉向'); }
+    } else { gaze.dir = d; gaze.n = 0; }
+  } else if (Math.abs(yaw) < 20) { gaze.armed = true; gaze.dir = 0; gaze.n = 0; }
+}
+
 const eyeM9 = new Float32Array(9);       // 每幀重複用，不要讓 GC 有事做
 function xrFrame(t, frame) {
   const ses = xr.session;
@@ -1411,6 +1437,7 @@ function xrFrame(t, frame) {
   // 姿態偶爾會拿不到一兩幀 —— 也要把畫面清乾淨再走，
   // 不清的話合成器拿到舊幀，看起來就是閃一下
   if (!pose || !S.cur || !S.cur.meta) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); return; }
+  vrGaze(pose);
   gl.uniform1f(U('uVR'), 1);
   gl.uniform1f(U('uCyl'), 0);
   gl.uniform1f(U('uPitch'), 0);
