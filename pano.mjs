@@ -111,6 +111,15 @@ export async function panoMeta(pano) {
   // 有些全景沒有高度資料（P[1][1] 是 null）—— 直接取 [0] 會炸，
   // 而 panoMeta 一炸整個載入就失敗，跑步時會看到「街景資料逾時」
   const me = { lat: self[2], lng: self[3], el: (P[1][1] && P[1][1][0]) ?? 0 };
+  // 拍攝年月在 box[6][7]（[年, 月]）；時光機（歷史影像）在 P[8]，
+  // 每筆是 [鄰居索引, [年, 月]] —— 索引指回鄰居清單，那裡有歷史顆的 pano id。
+  // 2026-08-24 在京都實測出來的：鴨川那顆有 12 個年代，含三個四月的。
+  const date = (box[6] && box[6][7]) || null;
+  const eras = [];
+  for (const t of (P[8] || [])) {
+    const n = nb[t[0]];
+    if (n && n.id && t[1]) eras.push({ id: n.id, year: t[1][0], month: t[1][1] });
+  }
   // 自己的偏轉角就藏在鄰居清單第一筆（那一筆的 pano id 等於自己）
   const mine = nb.find(n => n.id === pano);
   const ind = readIndoor(box, P);
@@ -119,6 +128,8 @@ export async function panoMeta(pano) {
     pano,
     ...me,
     yaw: mine ? mine.yaw : 0,
+    date,                              // [年, 月]，可能是 null
+    eras,                              // 歷史影像：[{id, year, month}]，最新在前
     // 三個獨立訊號，畫面端可以自己選要多嚴格
     indoor: ind.indoor,                // 有樓層清單＝室內或地下
     source: ind.source,                // launch / scout / innerspace

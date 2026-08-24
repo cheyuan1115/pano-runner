@@ -251,6 +251,10 @@ const S = {
   asking: null,                         // 正在問的景點
   askedIds: new Set(),                  // 問過的不再問
   mini: true,                           // 左下角小地圖（m 鍵開關）
+  // 櫻花模式：載入每顆全景時，不是 3–4 月拍的就自動切到時光機裡的春天版本。
+  // 歷史全景有自己的連結圖（同一趟拍攝前後相連），所以整條路能在那個年代裡跑；
+  // 鏈斷了會自然退回目前年代，下一顆再試著跳回春天。
+  season: null,                         // 'sakura' = 偏好 3–4 月
   askNear: null,                        // 詢問中的景點最近曾經多近
   askAway: 0,                           // 連續幾次在拉開距離
   accepting: false,                     // 答應導覽後、路還沒找到的空窗期
@@ -388,6 +392,26 @@ async function load(P, panoId, heading) {
       { signal: AbortSignal.timeout(12000) })).json();
   } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; return false; }
   if (meta.error) { S.note = meta.error; return false; }
+  // 櫻花模式：這顆不是四月拍的、而且時光機裡有更好的春天版本 → 改載那顆。
+  // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
+  // **只有四月算數** —— 實測 2018/3 的鏈整條樹是光的（三月初根本還沒開），
+  // 三月只在完全沒有四月版本時當備胎。
+  if (S.season === 'sakura' && meta.date && meta.date[1] !== 4) {
+    const spring = (meta.eras || [])
+      .filter(e => e.month === 4 || (meta.date[1] !== 3 && e.month === 3))
+      // 四月優先，同月份取最新的（畫質較好）
+      .sort((a, b) => (b.month === 4) - (a.month === 4) || b.year - a.year)[0];
+    if (spring) {
+      try {
+        const m2 = await (await fetch('/api/meta?pano=' + encodeURIComponent(spring.id),
+          { signal: AbortSignal.timeout(12000) })).json();
+        if (!m2.error && m2.geom && m2.links.length) {
+          meta = m2;
+          S.note = `🌸 ${spring.year} 年 ${spring.month} 月`;
+        }
+      } catch {}
+    }
+  }
   P.meta = meta; P.det = null; P.tiles = 0;
 
   const TSb = meta.geom.tile, gb = meta.geom.zooms[BASE_ZOOM];
@@ -581,6 +605,8 @@ function drawInner() {
     `${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}   `
     + (isIndoor(m) ? `⚠ ${m.floor || '室內'}（${m.source || '?'}）` : '戶外')
     + (indoorIds.size ? `　避開 ${indoorIds.size} 顆` : '') + '\n'
+    + (S.season && S.cur?.meta?.date
+       ? `🌸 影像 ${S.cur.meta.date[0]}/${S.cur.meta.date[1]}   ` : '')
     + `朝向 ${Math.round((S.heading % 360 + 360) % 360)}°   `
     + (S.proj === 'pan'
        ? `${S.paniniD < 0 ? '圓柱' : 'Panini d=' + S.paniniD.toFixed(1)} 水平 ${S.span}°　`
@@ -2082,6 +2108,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('mini') === '0') S.mini = false;
+  if (q.get('season')) S.season = q.get('season');
   if (q.get('targets')) {
     S.targets = q.get('targets').split('|').map(t => {
       const [la, ln] = t.split(',').map(Number);
