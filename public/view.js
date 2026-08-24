@@ -360,7 +360,10 @@ const hHalfDeg = () =>
 function tileWindow(meta, heading) {
   const g = meta.geom.zooms[S.zoom], TS = meta.geom.tile;
   const cols = Math.ceil(g.w / TS), rows = Math.ceil(g.h / TS);
-  const spanDeg = S.proj === 'pan'
+  // VR 抓整圈 —— 頭會轉到任何方向，只抓行進方向那一帶的話，
+  // 側面和後面落在 zoom2 的底圖上，一轉頭就是糊的。
+  const spanDeg = xr.session ? 360
+    : S.proj === 'pan'
     ? Math.min(360, S.span + 30)
     : Math.min(360, hHalfDeg() * 2 * S.panels + 30);
   const s0 = ((heading - meta.yaw - spanDeg / 2) / 360 + 0.5) % 1;
@@ -373,8 +376,8 @@ function tileWindow(meta, heading) {
   const cw = exact ? Math.min(cols, Math.ceil(spanDeg / 360 * g.w / TS) + 1) : cols;
   const vHalf = S.fov / 2;
   // pan 模式的可見範圍由 vFit 決定（仰角已含在內），用實際值抓才不會漏磚塊
-  const topE = (S.proj === 'pan' && vEff.topDeg) ? vEff.topDeg : S.pitch + vHalf;
-  const botE = (S.proj === 'pan' && vEff.topDeg) ? vEff.botDeg : vHalf - S.pitch;
+  const topE = xr.session ? 75 : (S.proj === 'pan' && vEff.topDeg) ? vEff.topDeg : S.pitch + vHalf;
+  const botE = xr.session ? 60 : (S.proj === 'pan' && vEff.topDeg) ? vEff.botDeg : vHalf - S.pitch;
   const t0 = Math.max(0, 0.5 - (topE + 14) / 180);
   const t1 = Math.min(1, 0.5 + (botE + 14) / 180);
   const cy0 = Math.max(0, Math.floor(t0 * g.h / TS));
@@ -1423,7 +1426,11 @@ async function enterVR() {
     // 緩衝裡是垃圾）。上一版連 alpha:false、depth:false 一起設，
     // 結果整個 VR 黑畫面 —— 部分 Quest 瀏覽器版本對非預設的層選項有
     // 已知問題，其他一律用預設值，建層失敗再退回完全無選項。
-    try { xr.layer = new XRWebGLLayer(ses, gl, { ignoreDepthValues: true }); }
+    // framebufferScaleFactor 1.2：瀏覽器的建議值在 Quest 上通常低於面板
+    // 原生解析度（效能保守），拉高一點畫面明顯變利。1.2 是 Quest 1 的
+    // GPU 還撐得住的值，再高會掉幀。
+    try { xr.layer = new XRWebGLLayer(ses, gl, { ignoreDepthValues: true,
+                                                 framebufferScaleFactor: 1.2 }); }
     catch { xr.layer = new XRWebGLLayer(ses, gl); }
     ses.updateRenderState({ baseLayer: xr.layer });
     xr.refSpace = await ses.requestReferenceSpace('local-floor')
