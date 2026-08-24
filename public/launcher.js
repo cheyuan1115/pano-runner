@@ -331,7 +331,9 @@ el('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
 //   造幣局「桜の通り抜け」2012/4 腳架拍，60+ 顆相連約 300 公尺
 //   千鳥ヶ淵 2019/4 綠道
 const QUICK = [
+  ['🌸上野公園', 35.7148, 139.7737, 16, 'rail=ueno&season=sakura'],
   ['🌸大阪造幣局', 34.69571, 135.52176, 17, 'rail=mint&season=sakura'],
+  ['🌸高遠城址', 35.8340, 138.0626, 16, 'rail=takato&season=sakura'],
   ['🌸千鳥ヶ淵', 35.68993, 139.74772, 16, 'rail=chidori&season=sakura'],
   ['香榭麗舍', 48.8698, 2.3078, 16],
   ['塞納河畔', 48.8566, 2.3450, 16],
