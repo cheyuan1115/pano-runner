@@ -1144,26 +1144,37 @@ function speak(lm) {
   //      一張都載不進來。
   // 現在網址指向自家的 /photo（同源、伺服器端有快取），<img> 只發一次請求，
   // 尺寸從 img 自己身上讀，沒有任何中間層可以壞掉。
-  const showPhoto = (k, tries = 0) => {
+  // photoSeq：一輪一個序號。輪播計時器每次開新的一輪，舊一輪的重試鏈立刻作廢。
+  // 沒有這個的話：照片沒快取到、撞到維基的 429 時，onerror 每 700ms 試下一張，
+  // 而計時器又開新的鏈 —— 幾條鏈同時活著，每條成功一次就交叉淡入一次，
+  // 疊起來就是「超過一張照片就狂閃」。badPhoto 記住失敗的網址，之後的輪播
+  // 直接跳過，不會一直轉回去踩同一個 429。
+  let photoSeq = 0;
+  const badPhoto = new Set();
+  const showPhoto = (k, tries = 0, seq = null) => {
     const ph = lm.photos || [];
+    if (seq === null) seq = ++photoSeq;          // 新的一輪；舊鏈全部失效
+    if (seq !== photoSeq) return;
     if (finished || !ph.length || tries >= ph.length || !mine()) return;
+    const url = ph[k % ph.length];
+    if (badPhoto.has(url)) { showPhoto(k + 1, tries + 1, seq); return; }
     const el = layers[cur ^ 1];
     el.onload = () => {
+      if (seq !== photoSeq) return;              // 這一輪已經被取代了
       if (finished || !mine() || !el.naturalWidth) return;
-      // 框固定，照片用 CSS 的 object-fit: contain 完整放進去。
-      // 先前在這裡依每張照片的比例改框的寬高 —— 六張輪播時框一直在變形，
-      // 那就是「有多張照片時就會一直閃」的成因。
+      // 框固定，照片用 CSS 的 object-fit: contain 完整放進去
+      //（框跟著每張照片變形是另一種「一直閃」，之前修過了）。
       el.classList.add('on');
       layers[cur].classList.remove('on');
       cur ^= 1;
       pv.classList.add('on');           // 只有真的畫出來了才顯示外框
     };
-    // 失敗就等一下再換下一張。立刻連鎖就是「一直閃」。
     el.onerror = () => {
+      badPhoto.add(url);
       S.photoFail = (S.photoFail || 0) + 1;
-      if (mine() && !finished) setTimeout(() => showPhoto(k + 1, tries + 1), 700);
+      if (seq === photoSeq && mine() && !finished)
+        setTimeout(() => showPhoto(k + 1, tries + 1, seq), 700);
     };
-    const url = ph[k % ph.length];
     // 同一個網址再設一次不會觸發 onload（瀏覽器認為沒變），要自己叫
     if (el.getAttribute('src') === url) { if (el.complete) el.onload(); return; }
     el.src = url;
