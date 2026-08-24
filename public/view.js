@@ -441,7 +441,10 @@ function drawOne(P, alpha, tanHalf, aspect, tMove, off, panoPos) {
   gl.uniform1f(U('uAspect'), aspect);
   // Panini／圓柱的仰角已經算進取樣窗（vFit），再轉一次就重複了
   gl.uniform1f(U('uPitch'), S.proj === 'pan' ? 0 : rad(S.pitch));
-  gl.uniform1f(U('uVR'), 0);
+  // uVR 依「現在是不是在 XR 迴圈裡」決定。之前寫死 0 —— 但 xrFrame 也是
+  // 呼叫這個函式畫的，等於進了 VR 又立刻被改回平面路徑，
+  // 頭盔裡看到的是把 Panini 畫面硬塞進兩眼的東西（實測「畫面不對」）。
+  gl.uniform1f(U('uVR'), xr.session ? 1 : 0);
   gl.uniform1f(U('uAlpha'), alpha);
   gl.uniform1f(U('uOff'), rad(off || 0));
   // 行進方向轉進這顆全景的影像經度座標系
