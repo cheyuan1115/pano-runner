@@ -1349,7 +1349,12 @@ async function enterVR() {
     const ses = await navigator.xr.requestSession('immersive-vr',
       { optionalFeatures: ['local-floor'] });
     xr.session = ses;
-    xr.layer = new XRWebGLLayer(ses, gl);
+    // ignoreDepthValues 一定要開。我們的著色器是全螢幕貼球面、從來不寫深度，
+    // 深度緩衝裡是垃圾 —— Quest 的合成器預設會拿深度做每眼的重投影，
+    // 照著垃圾扭曲的兩眼對不上，看起來就是「左右眼畫面快速閃動」，
+    // 頭有微小晃動時（跑步機上一定有）連直線都會發作。
+    xr.layer = new XRWebGLLayer(ses, gl, { antialias: true, depth: false,
+                                           ignoreDepthValues: true });
     ses.updateRenderState({ baseLayer: xr.layer });
     xr.refSpace = await ses.requestReferenceSpace('local-floor')
       .catch(() => ses.requestReferenceSpace('local'));
@@ -1399,8 +1404,10 @@ function xrFrame(t, frame) {
   ses.requestAnimationFrame(xrFrame);
   pumpUploads(2);                        // 磚塊限速貼，一幀最多兩塊
   gl.bindFramebuffer(gl.FRAMEBUFFER, xr.layer.framebuffer);
+  gl.disable(gl.DEPTH_TEST);            // 球面貼圖不用深度，殘值只會害事
+  gl.depthMask(false);
   gl.clearColor(0.05, 0.055, 0.065, 1);
-  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   const pose = frame.getViewerPose(xr.refSpace);
   // 姿態偶爾會拿不到一兩幀 —— 也要把畫面清乾淨再走，
   // 不清的話合成器拿到舊幀，看起來就是閃一下
