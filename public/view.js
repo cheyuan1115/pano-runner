@@ -689,6 +689,11 @@ function pickLink(meta, dir, wish) {
     if (i >= 0 && i + 1 < S.rail.length) {
       const nx = meta.links.find(l => l.id === S.rail[i + 1]);
       if (nx) return nx;
+      // 下一顆不在連結裡 = 軌道跨段（步道採集常是碎段，段間沒有連結）。
+      // 造一個合成連結直接跳過去 —— 距離先猜 15 公尺、方向沿用行進方向，
+      // 抵達位置由那顆的中繼資料校正（跟 79 公尺斷點的快轉同一套）。
+      return { id: S.rail[i + 1], heading: S.travelDir, d: 15, dz: 0,
+               lat: meta.lat, lng: meta.lng };
     }
     return null;                        // 軌道走完 → 上層自然結束這一趟
   }

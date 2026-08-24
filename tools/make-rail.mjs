@@ -9,26 +9,42 @@ const meta = async id => (await (await fetch('http://localhost:8877/api/meta?pan
 const m0 = await meta(pano);
 const era = m0.date.join('/');
 console.log(`  起點年代 ${era}`);
-// 兩個方向都走到底，接起來
-const walk = async (start, firstLink) => {
-  const ids = [], seen = new Set([start]);
-  let cur = firstLink;
-  for (let i = 0; i < 200 && cur; i++) {
-    const m = await meta(cur);
-    if (m.error || !m.date || m.date.join('/') !== era) break;   // 出年代就停
-    ids.push(cur); seen.add(cur);
-    const next = m.links.filter(l => !seen.has(l.id));
-    cur = next.length ? next[0].id : null;
+// 步道採集常有分岔，傻走 links[0] 會走進死巷（伏見稻荷實測只抓到 5 顆）。
+// 改成：先把整個「同年代連結圖」爬下來，再取圖上的最長路徑。
+const adj = new Map(), seen = new Set([pano]);
+let frontier = [pano];
+while (frontier.length && seen.size < 500) {
+  const next = [];
+  for (const id of frontier) {
+    const m = await meta(id);
+    if (m.error || !m.date || m.date.join('/') !== era) { seen.delete(id); continue; }
+    const nbrs = m.links.map(l => l.id);
+    adj.set(id, nbrs);
+    for (const n of nbrs) if (!seen.has(n)) { seen.add(n); next.push(n); }
     await new Promise(r => setTimeout(r, 120));
   }
-  return ids;
+  frontier = next;
+  process.stdout.write(`\r  爬圖中 ${adj.size} 顆…`);
+}
+console.log(`\r  同年代連結圖共 ${adj.size} 顆`);
+// 圖上最長路徑：從任一點 BFS 找最遠點 A，再從 A BFS 找最遠點 B，取 A→B 路徑
+// （樹狀圖是精確解，步道圖幾乎都是樹）
+const bfs = (src) => {
+  const prev = new Map([[src, null]]);
+  let q = [src], last = src;
+  while (q.length) {
+    const nq = [];
+    for (const u of q) for (const v of (adj.get(u) || []))
+      if (adj.has(v) && !prev.has(v)) { prev.set(v, u); nq.push(v); last = v; }
+    q = nq;
+  }
+  return { last, prev };
 };
-const dirs = m0.links.map(l => l.id);
-const a = dirs[0] ? await walk(pano, dirs[0]) : [];
-const b = dirs[1] ? await walk(pano, dirs[1]) : [];
-// b 反轉 + 起點 + a ＝ 完整走廊
-const rail = [...b.reverse(), pano, ...a];
-console.log(`  軌道 ${rail.length} 顆（往一邊 ${a.length}、另一邊 ${b.length}）`);
+const a1 = bfs(pano).last;
+const { last: b1, prev } = bfs(a1);
+const rail = [];
+for (let v = b1; v != null; v = prev.get(v)) rail.push(v);
+console.log(`  最長路徑 ${rail.length} 顆（${a1.slice(0,8)}… → ${b1.slice(0,8)}…）`);
 let all = {};
 try { all = JSON.parse(await readFile('public/rails.json', 'utf8')); } catch {}
 all[name] = { era, ids: rail };
