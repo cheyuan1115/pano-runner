@@ -1779,7 +1779,10 @@ addEventListener('keydown', e => {
   else if (e.key === '+' || e.key === '=') S.kmh = Math.min(20, S.kmh + 1);
   else if (e.key === '-') S.kmh = Math.max(4, S.kmh - 1);
   else if (e.key >= '1' && e.key <= '9') setPanels(+e.key);
-  else if (e.key === '9') S.pitch = S.pitch >= 12 ? 0 : S.pitch + 4;
+  // 仰角本來綁在 9，但上面那行先把 1–9 全攔走設片數了 —— 那行是死程式碼，
+  // 仰角從來沒有按鍵能調（只剩滑鼠上下拖曳）。改綁 p / P。
+  else if (e.key === 'p') S.pitch = Math.min(30, S.pitch + 4);
+  else if (e.key === 'P') S.pitch = Math.max(-30, S.pitch - 4);
   else if (e.key === 'i') hud.classList.toggle('fold');
   else if (e.key === ',') {
     tune.classList.toggle('on');
