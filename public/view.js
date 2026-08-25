@@ -1626,10 +1626,11 @@ function mmvrInit() {
   // 兩眼對不起來就是雙影(實測)。用每隻眼自己的投影矩陣投出來,
   // 加上半瞳距的位移,視差幾何正確、穩定融合在 1.35 公尺。
   // (角落也不行 —— 眼緩衝區邊角不在鏡片可視圈裡,畫了看不到。)
-  const vs = `attribute vec2 aPos; uniform mat4 uP; uniform float uEyeOff; varying vec2 vUV;
+  const vs = `attribute vec2 aPos; uniform mat4 uP; uniform float uEyeOff;
+    uniform vec2 uPos, uSize; varying vec2 vUV;
     void main(){ vUV = vec2(aPos.x, 1.0 - aPos.y);
-      vec3 p = vec3((aPos.x - 0.5) * 0.48 - 0.55 + uEyeOff,
-                    (aPos.y - 0.5) * 0.48 - 0.42, -1.35);
+      vec3 p = vec3((aPos.x - 0.5) * uSize.x + uPos.x + uEyeOff,
+                    (aPos.y - 0.5) * uSize.y + uPos.y, -1.35);
       gl_Position = uP * vec4(p, 1.0); }`;
   const fs = `precision mediump float; varying vec2 vUV; uniform sampler2D uTex;
     void main(){ vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb, c.a * 0.62); }`;
@@ -1649,6 +1650,8 @@ function mmvrInit() {
   MMVR.aPos = gl.getAttribLocation(p, 'aPos');
   MMVR.uP = gl.getUniformLocation(p, 'uP');
   MMVR.uEyeOff = gl.getUniformLocation(p, 'uEyeOff');
+  MMVR.uPos = gl.getUniformLocation(p, 'uPos');
+  MMVR.uSize = gl.getUniformLocation(p, 'uSize');
   MMVR.uTex = gl.getUniformLocation(p, 'uTex');
   MMVR.buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, MMVR.buf);
@@ -1684,6 +1687,8 @@ function mmvrDraw(eyeSign, projMat) {
   gl.uniform1i(MMVR.uTex, 2);
   gl.uniformMatrix4fv(MMVR.uP, false, projMat || FLAT_P);
   gl.uniform1f(MMVR.uEyeOff, eyeSign * 0.0315);   // 半瞳距 ≈ 63mm / 2
+  gl.uniform2f(MMVR.uPos, -0.55, -0.42);
+  gl.uniform2f(MMVR.uSize, 0.48, 0.48);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   MMVR.dbg.glerr = gl.getError();
   MMVR.dbg.drawn = (MMVR.dbg.drawn || 0) + 1;
@@ -1752,6 +1757,73 @@ function vrStick() {
   }
 }
 
+// ── VR 字幕面板 ──────────────────────────────────────────
+// 導覽字幕是 DOM,沉浸模式看不到 —— 跟小地圖同一招:畫進 canvas、
+// 貼在視野下方偏中的面板(頭前 1.35 公尺,寬 1.15 公尺)。
+const SUB = { cv: null, ctx: null, tex: null, last: '', fresh: false };
+function subVrUpdate() {
+  if (!S.speaking) { SUB.last = ''; return; }
+  const name = S.nowSpeaking || '';
+  const line = ($('lm-text') && $('lm-text').textContent) || '';
+  const key = name + '|' + line;
+  if (key === SUB.last) return;
+  SUB.last = key;
+  if (!SUB.cv) {
+    SUB.cv = document.createElement('canvas');
+    SUB.cv.width = 1024; SUB.cv.height = 236;
+    SUB.ctx = SUB.cv.getContext('2d');
+    SUB.tex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, SUB.tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  const g = SUB.ctx, W = SUB.cv.width, H = SUB.cv.height;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = 'rgba(10,11,14,.72)';
+  g.beginPath(); g.roundRect(0, 0, W, H, 22); g.fill();
+  g.fillStyle = '#e8c66a';
+  g.font = '600 34px -apple-system, system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.fillText(name, W / 2, 52);
+  // 內文自動換行,最多三行
+  g.fillStyle = '#fff';
+  g.font = '600 40px -apple-system, system-ui, sans-serif';
+  const lines = [];
+  let cur = '';
+  for (const ch of line) {
+    if (g.measureText(cur + ch).width > W - 90) { lines.push(cur); cur = ch; }
+    else cur += ch;
+    if (lines.length >= 3) break;
+  }
+  if (cur && lines.length < 3) lines.push(cur);
+  lines.forEach((t, i) => g.fillText(t, W / 2, 108 + i * 52));
+  SUB.fresh = true;
+}
+function subVrDraw(eyeSign, projMat) {
+  if (!S.speaking || !SUB.tex) return;
+  if (!MMVR.prog) mmvrInit();
+  gl.activeTexture(gl.TEXTURE3);
+  gl.bindTexture(gl.TEXTURE_2D, SUB.tex);
+  if (SUB.fresh) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, SUB.cv); SUB.fresh = false; }
+  gl.useProgram(MMVR.prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, MMVR.buf);
+  gl.enableVertexAttribArray(MMVR.aPos);
+  gl.vertexAttribPointer(MMVR.aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform1i(MMVR.uTex, 3);
+  gl.uniformMatrix4fv(MMVR.uP, false, projMat || FLAT_P);
+  gl.uniform1f(MMVR.uEyeOff, eyeSign * 0.0315);
+  gl.uniform2f(MMVR.uPos, 0.14, -0.50);
+  gl.uniform2f(MMVR.uSize, 1.15, 0.265);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.useProgram(prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, mainBuf);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.activeTexture(gl.TEXTURE0);
+}
+
 const eyeM9 = new Float32Array(9);       // 每幀重複用，不要讓 GC 有事做
 function xrFrame(t, frame) {
   const ses = xr.session;
@@ -1768,6 +1840,7 @@ function xrFrame(t, frame) {
   // 不清的話合成器拿到舊幀，看起來就是閃一下
   if (!pose || !S.cur || !S.cur.meta) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); return; }
   vrStick();
+  subVrUpdate();
   vrGaze(pose);
   handPace(frame, t);
   headPace(pose, t);
@@ -1803,8 +1876,9 @@ function xrFrame(t, frame) {
       drawOne(S.nxt, S.mix, 1, 1, S.tMove - S.stepD, 0, 1);
       gl.uniform1f(U('uYaw'), rad(S.heading - S.cur.meta.yaw));
     }
-    // 小地圖面板:用這隻眼的投影矩陣 + 半瞳距位移
+    // 小地圖與字幕面板:用這隻眼的投影矩陣 + 半瞳距位移
     mmvrDraw(view.eye === 'left' ? 1 : -1, view.projectionMatrix);
+    subVrDraw(view.eye === 'left' ? 1 : -1, view.projectionMatrix);
   }
   gl.uniform1f(U('uVR'), 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
