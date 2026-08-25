@@ -2370,12 +2370,11 @@ async function lateralHop(side) {
 // 轉向指令。語音（voice.js）和鍵盤共用這一個入口。
 window.__turn = (cmd, text) => {
   if (cmd === 'guide') {
-    acceptGuide().then(ok => {
-      // 有景點講景點(資料庫的稿子比 AI 穩);沒有景點就問 AI
-      if (!ok) aiGuide();
-    });
+    // 「導覽」= 內建景點;附近沒有景點可講時才退而問 AI
+    acceptGuide().then(ok => { if (!ok) aiGuide(); });
     return;
   }
+  if (cmd === 'aiguide') { aiGuide(); return; }   // 「介紹」= 永遠問 AI
   if (cmd === 'stop') { finishRun(text); return; }
   S.turnSeq++;
   if (cmd === 'back') {
