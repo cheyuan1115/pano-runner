@@ -12,9 +12,12 @@
      （也就是 ink.width = 視窗寬 × dpr），等於整張畫布放大兩倍、標記位置全偏掉。
      一定要明寫 width/height。#gl 有寫 100vw 所以跑步頁沒事，只有這張漏了。 */
   #ink { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  /* max-height + 捲動不能少 —— 選項愈加愈多(櫻花、鎖定月份、特色路線),
+     視窗矮一點「開始跑」就被推出畫面外,看起來像自由跑功能不見了(實測)。 */
   #side { position: absolute; right: 14px; top: 14px; width: 290px; z-index: 5;
           background: rgba(16,17,21,.92); border: 1px solid #2c2f36; border-radius: 12px;
-          padding: 14px 15px; backdrop-filter: blur(10px); }
+          padding: 14px 15px; backdrop-filter: blur(10px);
+          max-height: calc(100vh - 28px); overflow-y: auto; }
   h1 { font-size: 15px; margin: 0 0 10px; letter-spacing: .3px; }
   label { display: block; font-size: 12px; color: #8b909a; margin: 11px 0 4px; }
   input, select { width: 100%; box-sizing: border-box; background: #1a1c21; color: #e8e8ea;
