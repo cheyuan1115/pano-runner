@@ -753,6 +753,7 @@ async function escapeIndoor(meta) {
     if (!await load(P, r.pano, r.heading)) { S.note = '⚠ 脫困點載不起來'; return false; }
     dropQueue();
     S.cur = P; S.travelDir = r.heading; S.heading = r.heading;
+    updateAttr();
     S.turnSeq++; S.indoorRun = 0;
     S.lastOutdoor = { P, dir: r.heading };
     S.note = `⤳ 跳到 ${r.r} m 外的地面`;
@@ -942,6 +943,7 @@ async function stepOnce() {
   if (S.stepLog.length > 60) S.stepLog.shift();           // 這次轉場的實際畫格率
 
   S.cur = P; S.nxt = null; S.mix = 0; S.tMove = 0;
+  updateAttr();
   // 這一步進行中如果下過轉向指令，就不要用舊連結的角度覆寫方向
   if (seq === S.turnSeq) {
     S.travelDir = aimHead;
@@ -1752,6 +1754,17 @@ function xrFrame(t, frame) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
+// 下方版權列順便顯示這一段街景的拍攝年月 —— 跑到一半發現腳下是
+// 哪一年的街景,比藏在 HUD 裡有感(櫻花模式的年代切換也一眼看得到)。
+function updateAttr() {
+  const el = document.getElementById('attr');
+  if (!el) return;
+  const d = S.cur?.meta?.date;
+  el.textContent = '影像 © Google 街景服務'
+    + (d ? `（${d[0]} 年 ${d[1]} 月拍攝）` : '')
+    + '　地圖 © OpenStreetMap／CARTO';
+}
+
 // ── 左下角小地圖 ──────────────────────────────────────────────
 // 跑步時要能一眼看出「我在哪、朝哪、下一個景點在哪邊」。不做互動，
 // 磚塊走自家的 /maptile（會存本機，跑同一條路線不用一直跟 CDN 要）。
@@ -2092,6 +2105,7 @@ async function lateralHop(side) {
       if (!await load(P, f.pano, good.heading)) continue;
       dropQueue();
       S.cur = P; S.travelDir = good.heading; S.heading = good.heading;
+      updateAttr();
       S.turnSeq++; S.wish = null;
       S.note = `⤳ 側移 ${dist} m 轉進岔路`;
       fillQueue(); draw();
@@ -2433,6 +2447,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   S.cur = mkPano();
   hud.textContent = '載入街景磚塊…';
   await load(S.cur, pano, S.heading);
+  updateAttr();                                // 開機第一顆也要顯示拍攝年月
   draw();
   window.__ready = true;                       // 給自動化測試用：磚塊真的抓完了
   if (S.role !== 'follow') fillQueue();
