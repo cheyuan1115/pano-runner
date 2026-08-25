@@ -890,7 +890,8 @@ async function stepOnce() {
 
   // 手擺速只在「最近有讀到控制器」時生效 —— 放下控制器 2.5 秒後
   // 回到啟動器設定的固定速度（不然速度會凍在放下前的值）
-  const paceSrc = () => (xr.session && VH.seen && Date.now() - VH.at < 2500) ? 'hand'
+  const paceSrc = () => (xr.session && VH.seen && Date.now() - VH.at < 2500
+                          && Date.now() - ST.at > 10000) ? 'hand'
                       : (xr.session && HB.at && Date.now() - HB.at < 2500) ? 'head'
                       : (S.mic ? 'mic' : null);
   if (paceSrc()) {
@@ -1565,7 +1566,8 @@ function vrGaze(pose) {
       if (++gaze.gN > 70) { gaze.gN = 0; window.__turn('guide', '盯著景點'); }
     } else gaze.gN = 0;
   } else gaze.gN = 0;
-  // 轉向
+  // 轉向(撥過搖桿的 15 秒內讓位給搖桿)
+  if (Date.now() - ST.at < 15000) { gaze.dir = 0; gaze.n = 0; return; }
   if (gaze.armed) {
     const d = yaw > 45 ? 1 : yaw < -45 ? -1 : 0;
     if (d && d === gaze.dir) {
@@ -1720,6 +1722,36 @@ function headPace(pose, t) {
   HB.at = Date.now();
 }
 
+// ── 手把搖桿轉彎(VR)──────────────────────────────────────
+// 視線轉彎實測不好用(看風景就誤觸、要持續盯很累)。改用搖桿:
+//   往左/右撥過 65% → 下個路口轉那邊(回中才重新武裝,不連發)
+//   往下撥 → 回頭;扳機或 A 鍵 → 「導覽」
+// 撥過搖桿的 15 秒內停用視線轉彎(兩套同時作用會互相干擾),
+// 手擺控速也讓位給頭部起伏 —— 握著手把撥桿時手是靜止的,
+// 手擺會誤判成「停」。
+const ST = { armed: true, at: 0, btn: false };
+function vrStick() {
+  const ses = xr.session;
+  if (!ses) return;
+  for (const src of ses.inputSources) {
+    const gp = src.gamepad;
+    if (!gp || !gp.axes) continue;
+    // xr-standard:搖桿在 axes[2,3];舊裝置可能在 [0,1]
+    const x = gp.axes.length > 2 ? gp.axes[2] : (gp.axes[0] || 0);
+    const y = gp.axes.length > 3 ? gp.axes[3] : (gp.axes[1] || 0);
+    if (Math.abs(x) > 0.2 || Math.abs(y) > 0.2) ST.at = Date.now();
+    if (ST.armed) {
+      if (x > 0.65) { ST.armed = false; window.__turn('right', '搖桿'); }
+      else if (x < -0.65) { ST.armed = false; window.__turn('left', '搖桿'); }
+      else if (y > 0.75) { ST.armed = false; window.__turn('back', '搖桿'); }
+    } else if (Math.abs(x) < 0.3 && Math.abs(y) < 0.3) ST.armed = true;
+    const pressed = (gp.buttons[0] && gp.buttons[0].pressed)
+                 || (gp.buttons[4] && gp.buttons[4].pressed);
+    if (pressed && !ST.btn) { ST.btn = true; window.__turn('guide', '按鍵'); }
+    else if (!pressed) ST.btn = false;
+  }
+}
+
 const eyeM9 = new Float32Array(9);       // 每幀重複用，不要讓 GC 有事做
 function xrFrame(t, frame) {
   const ses = xr.session;
@@ -1735,6 +1767,7 @@ function xrFrame(t, frame) {
   // 姿態偶爾會拿不到一兩幀 —— 也要把畫面清乾淨再走，
   // 不清的話合成器拿到舊幀，看起來就是閃一下
   if (!pose || !S.cur || !S.cur.meta) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); return; }
+  vrStick();
   vrGaze(pose);
   handPace(frame, t);
   headPace(pose, t);
