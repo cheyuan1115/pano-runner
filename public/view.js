@@ -2086,7 +2086,14 @@ function nextTarget() {
   S.bestToTarget = Infinity;
   S.targetSetAt = S.moved; S.bestAt = S.moved;
   if (S.target) { S.targetNo++; dropQueue(); fillQueue(); }
-  else { S.note = '⌖ 全部跑完'; S.running = false; finishRoute(); }
+  else {
+    // 跑完所有點**不要停** —— 接著沿目前方向自由跑。
+    // 「點起點、點方向就開跑」的原始語意就是這樣:第二點是指方向,
+    // 不是終點;跑到那裡就結束會把自由跑閹掉(使用者實測抱怨)。
+    // 想結束隨時說「結束跑步」或按空白鍵。
+    S.note = '⌖ 路線跑完，繼續自由跑（說「結束跑步」停）';
+    saveTrack();
+  }
 }
 
 function finishRoute() {
