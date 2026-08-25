@@ -65,7 +65,19 @@ void main() {
     // d→0 退化成直線透視。注意 d 不能太大 —— 實測 d=5、半視野 105° 時
     // asin 的引數會飽和，算出 98° 而不是 105°，所以上限壓在 2。
     float lo, la;
-    if (uD < 0.0) {
+    if (uD < -1.5) {
+      // 混合投影:中央 ±48° 是純直線透視(直線就是直線,零變形),
+      // 超過之後平滑接上等角翼(角度線性,壓縮但不再彎更多)。
+      // 接點處值與斜率都連續(等角翼斜率 = sec²48°),不會有折痕。
+      float X = vUV.x * uKx;                  // uKx = 半視野對應的投影座標
+      float aX = abs(X);
+      const float TC = 0.837758;              // 48°
+      const float TANC = 1.110613;            // tan48°
+      const float SEC2 = 2.233549;            // sec²48°
+      lo = aX <= TANC ? atan(X)
+         : sign(X) * (TC + (aX - TANC) / SEC2);
+      la = atan(vUV.y * uKy + uVsh);
+    } else if (uD < 0.0) {
       lo = vUV.x * uKx;                       // uKx = 半視野（弧度）
       la = atan(vUV.y * uKy + uVsh);
     } else {
@@ -525,6 +537,9 @@ function draw() {
   if (S.mmvrTest) { try { gl.viewport(0, 0, cv.width, cv.height); mmvrDraw(0, null); } catch {} }
 }
 
+const HYB_TC = rad(48), HYB_TAN = Math.tan(HYB_TC), HYB_SEC2 = 1 / Math.cos(HYB_TC) ** 2;
+// 混合投影的前向式:半視野角 → 投影座標(中央 tan、兩翼線性)
+const hybX = a => a <= HYB_TC ? Math.tan(a) : HYB_TAN + (a - HYB_TC) * HYB_SEC2;
 function drawInner() {
   if (xr.session) return;               // VR 進行中由 xrFrame 畫
   const dpr = Math.min(2, devicePixelRatio || 1);
@@ -549,7 +564,8 @@ function drawInner() {
     // 垂直視野直接衝到 97°（下緣 −48°）—— 街景車的馬賽克整片跑回畫面裡。
     // 中央的像素是方的，所以由「下緣要停在哪」反推高度。
     const hs = rad(S.span / 2), D = S.paniniD;
-    const sc = D < 0 ? hs : Math.sin(hs) * (D + 1) / (D + Math.cos(hs));
+    const sc = D < -1.5 ? hybX(hs)
+             : D < 0 ? hs : Math.sin(hs) * (D + 1) / (D + Math.cos(hs));
     // 上下緣不對稱：投影面上下緣的座標是 tan(上)、−tan(下)，
     // 於是半高 = (tan上 + tan下)/2，中心偏移 = (tan上 − tan下)/2。
     // 兩者相等時偏移為 0，退化成原本的對稱情形。
@@ -570,8 +586,9 @@ function drawInner() {
     // 這樣兩個方向在中央的「每像素幾度」才一致。
     // （這幾行曾經在改自動比例時被整段覆蓋掉，uKx/uKy 一直是 0 → 按 0 切過去全黑。）
     const hs = rad(S.span / 2), D = S.paniniD;
-    const sc = D < 0 ? hs : Math.sin(hs) * (D + 1) / (D + Math.cos(hs));
-    gl.uniform1f(U('uKx'), D < 0 ? hs : sc / (D + 1));
+    const sc = D < -1.5 ? hybX(hs)
+             : D < 0 ? hs : Math.sin(hs) * (D + 1) / (D + Math.cos(hs));
+    gl.uniform1f(U('uKx'), D < -1.5 ? sc : D < 0 ? hs : sc / (D + 1));
     const ky = sc * vh / pw;
     gl.uniform1f(U('uKy'), ky);
     // vFit 已經保證 half 放得下，所以 ky 就等於 half，位移直接用不必再縮
@@ -620,7 +637,7 @@ function drawInner() {
          + `（鎖 ${S.lockMonths.join('/')}月）   ` : '')
     + `朝向 ${Math.round((S.heading % 360 + 360) % 360)}°   `
     + (S.proj === 'pan'
-       ? `${S.paniniD < 0 ? '圓柱' : 'Panini d=' + S.paniniD.toFixed(1)} 水平 ${S.span}°　`
+       ? `${S.paniniD < -1.5 ? '混合(中央直線)' : S.paniniD < 0 ? '圓柱' : 'Panini d=' + S.paniniD.toFixed(1)} 水平 ${S.span}°　`
          + `垂直 ${Math.round(vEff.topDeg + vEff.botDeg)}°`
          + `（+${vEff.topDeg.toFixed(0)}／−${vEff.botDeg.toFixed(0)}）`
          // 要求的跟畫得出來的不一樣時要講出來，不然看著數字調會愈調愈糟
@@ -2308,7 +2325,7 @@ addEventListener('keydown', e => {
   }
   else if (e.key === '0') S.proj = S.proj === 'pan' ? 'flat' : 'pan';
   else if (e.key === 'd') {
-    const L = [-1, 0.3, 0.6, 1.0, 1.5, 2.0];      // −1 = 圓柱
+    const L = [-2, -1, 0.3, 0.6, 1.0, 1.5, 2.0];  // −2 = 混合(中央直線)、−1 = 圓柱
     S.paniniD = L[(L.findIndex(x => Math.abs(x - S.paniniD) < 0.01) + 1) % L.length];
   }
   else if (e.key === 'f') S.bottomDeg = S.bottomDeg >= 34 ? 20 : S.bottomDeg + 3;
