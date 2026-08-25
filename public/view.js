@@ -1191,6 +1191,31 @@ const preAudio = new Map();
 // 第一次要經過 /photo 轉一手約三秒 —— 等播報開始才抓一定來不及。
 // 抓過的會留在伺服器的 .photocache 與瀏覽器快取，之後就是瞬間。
 const prePhoto = new Set();
+
+// 維基景點的語音當場生成(Google TTS,跟預錄 mp3 同一個音色)。
+// 只留記憶體 —— 個人用量離免費額度很遠,不值得為它管理檔案。
+const ttsMem = new Map();
+async function ttsFor(lm) {
+  if (!lm || !lm.lines || !lm.lines.length) throw new Error('沒句子');
+  if (ttsMem.has(lm.id)) return ttsMem.get(lm.id);
+  const r = await fetch('/api/tts', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: lm.id, lines: lm.lines }),
+    signal: AbortSignal.timeout(18000) });
+  const j = await r.json();
+  if (!j.audio) throw new Error(j.error || 'TTS 失敗');
+  const bin = atob(j.audio);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  const t = { url: URL.createObjectURL(new Blob([u8], { type: 'audio/ogg' })), marks: j.marks };
+  ttsMem.set(lm.id, t);
+  if (ttsMem.size > 30) {
+    const k = ttsMem.keys().next().value;
+    URL.revokeObjectURL(ttsMem.get(k).url); ttsMem.delete(k);
+  }
+  window.__ttsLast = { id: lm.id, marks: j.marks.length };
+  return t;
+}
 function preloadPhotos(lm) {
   if (!lm || !lm.photos || !lm.photos.length || prePhoto.has(lm.id)) return;
   prePhoto.add(lm.id);
@@ -1230,10 +1255,22 @@ function chime() {
 
 const $ = id => document.getElementById(id);
 
-function speak(lm) {
+async function speak(lm) {
+  // 先佔住旗標,避免 await 的空檔被 maybeNarrate 再觸發一次
+  if (S.speaking) return;
+  S.speaking = true;
+  // 維基景點:當場跟 Google 要語音(通常已被 300 公尺預抓,秒回)。
+  // 要不到(斷網、額度)就走原本的瀏覽器合成,不會沒聲音。
+  if (!lm.audio && lm.lines && lm.lines.length) {
+    try {
+      const t = await Promise.race([ttsFor(lm),
+        new Promise((_, rj) => setTimeout(() => rj(new Error('逾時')), 6000))]);
+      lm = { ...lm, audio: t.url, marks: t.marks };
+    } catch {}
+  }
   S.spoken.add(lm.id);
   S.lastSpokeAt = S.moved;
-  S.speaking = true; S.nowSpeaking = lm.name;
+  S.nowSpeaking = lm.name;
   // 播報中麥克風收到的是自己的喇叭聲 —— 步頻與語音指令都要跳過
   window.__speaking = true;
   chime();
@@ -1840,7 +1877,10 @@ function refreshNext(meta) {
   }
   S.nextLm = next;
   // 進入 300 公尺就先把音檔抓下來
-  if (next && next.d < 300) { preloadAudio(next); preloadPhotos(next); }
+  if (next && next.d < 300) {
+    preloadAudio(next); preloadPhotos(next);
+    if (!next.audio && next.lines && next.lines.length) ttsFor(next).catch(() => {});
+  }
   return next;
 }
 

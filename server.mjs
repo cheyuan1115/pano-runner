@@ -41,6 +41,8 @@ const PHOTO_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.photocach
 const VLOG = join(fileURLToPath(new URL('.', import.meta.url)), '.voicelog');
 const WIKI_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.wikicache');
 const MAP_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.maptiles');
+// 當場生成的語音,只留記憶體(使用者的決定:免費額度用不完,不必落地)
+const ttsMem = new Map();
 
 // 維基查詢一趟要打六到八次 API，連著打一定 429（實測第二個城市就中）。
 // 所以一定要快取。用約 1.1 公里見方的格子當鍵 —— 跑步時位置一直在動，
@@ -323,6 +325,53 @@ const handler = async (req, res) => {
         }
       }
       return json(res, { error: '附近找不到地面街景', tried: seen.size }, 404);
+    }
+    // 當場生成導覽語音(維基景點沒有預錄 mp3)。
+    // 免費額度 100 萬字/月,個人跑步用量的十倍以上 —— 不落地存檔,
+    // 記憶體暫存單純是同一趟不重複請求。逐句 <mark> 拿時間戳,字幕同步。
+    if (u.pathname === '/api/tts' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 40000) break; }
+      let lines, id;
+      try { ({ id, lines } = JSON.parse(body)); } catch { return json(res, { error: '格式' }, 400); }
+      if (!Array.isArray(lines) || !lines.length) return json(res, { error: '沒有句子' }, 400);
+      if (ttsMem.has(id)) return json(res, ttsMem.get(id));
+      let key;
+      try { key = (await readFile(join(process.env.HOME, '.keys', 'mapskey'), 'utf8')).trim(); }
+      catch { try { key = (await readFile('/tmp/.mapskey', 'utf8')).trim(); }
+              catch { return json(res, { error: '沒有 TTS 金鑰' }, 500); } }
+      // 念之前把「(土耳其語:Yerebatan…)」這類外語括號剝掉 ——
+      // 維基快取裡的巢狀括號清不乾淨,念出來是一串怪音。跑三輪處理巢狀。
+      const strip = t => {
+        for (let i = 0; i < 3; i++)
+          t = t.replace(/（[^（）]*[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF][^（）]*）/g, '')
+               .replace(/\([^()]*[A-Za-z][^()]*\)/g, '');
+        return t.replace(/\s{2,}/g, ' ').trim();
+      };
+      const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+      const ssml = '<speak>' + lines.slice(0, 60).map((t, i) => `<mark name="s${i}"/>${esc(strip(t))}`).join('') + '</speak>';
+      try {
+        const r = await fetch('https://texttospeech.googleapis.com/v1beta1/text:synthesize?key=' + key, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            input: { ssml },
+            voice: { languageCode: 'cmn-TW', name: 'cmn-TW-Wavenet-A' },
+            audioConfig: { audioEncoding: 'OGG_OPUS', speakingRate: 1.0 },
+            enableTimePointing: ['SSML_MARK'],
+          }), signal: AbortSignal.timeout(20000),
+        });
+        const j = await r.json();
+        if (!j.audioContent) return json(res, { error: (j.error && j.error.message || 'TTS 失敗').slice(0, 120) }, 502);
+        const marks = lines.slice(0, 60).map((_, i) => {
+          const tp = (j.timepoints || []).find(t => t.markName === 's' + i);
+          return tp ? tp.timeSeconds : 0;
+        });
+        const out = { audio: j.audioContent, marks };
+        ttsMem.set(id, out);
+        if (ttsMem.size > 40) ttsMem.delete(ttsMem.keys().next().value);
+        return json(res, out);
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
     }
     // 語音黑盒子。辨識這一段沒辦法從我這邊重現（我沒有辦法對麥克風講話），
     // 所以讓瀏覽器把每個事件送回來記著，才有辦法分辨是

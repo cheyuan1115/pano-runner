@@ -66,6 +66,8 @@ for (const [la, ln] of cells) {
     try {
       items = await wikiNearby(Math.round(la * 90) / 90, Math.round(ln * 90) / 90,
                                { radius: 1200, limit: 14 });
+      // 空結果也寫 —— 郊區真的可能沒景點;但查詢「失敗」會丟例外走下面,
+      // 絕不能把失敗寫成空格子快取 30 天(昨晚柏林就是這樣整城變 0)
       await writeFile(f, JSON.stringify({ at: Date.now(), items }));
       done++;
     } catch (e) { failed.push([k, la, ln, String(e.message || e)]); items = []; }

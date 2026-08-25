@@ -15,7 +15,9 @@
 //   巴黎 12、紐約 11、伊斯坦堡 7、東京 7、布拉格 3、清邁 3、台北 2、波爾圖 1
 // 只有兩成到兩成五的條目有中文版，這是硬限制。
 
-const UA = 'pano-runner/1.0 (personal virtual-running project)';
+// UA 帶聯絡方式是 Wikidata 的使用政策 —— 匿名重度使用會被封好幾小時
+// (2026-08-25 整夜實測:柏林愛丁堡整批 0 結果,早上自動解封)。
+const UA = 'pano-runner/1.0 (personal virtual-running; contact: cheyuan1115@gmail.com)';
 const nap = ms => new Promise(r => setTimeout(r, ms));
 // 被限流之後要退多久。批次抓的時候可以調大（tools/warm-wiki.mjs 會設）。
 export const tune = { retryMs: 3000, gapMs: 300 };
@@ -281,9 +283,16 @@ async function sparqlSpots(lat, lng, km) {
   ?site schema:about ?item .
   ?item p:P625/psv:P625 ?cv . ?cv wikibase:geoLatitude ?lat ; wikibase:geoLongitude ?lon .
 } GROUP BY ?zh ?lat ?lon ?img ORDER BY DESC(?links) LIMIT 80`;
-  const r = await fetch('https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(q),
-    { headers: { 'User-Agent': UA, Accept: 'application/sparql-results+json' },
-      signal: AbortSignal.timeout(60000) });
+  // 429/5xx 要退避重試,不能立刻放棄 —— 一放棄就落到 legacy 那條重 API 鏈,
+  // 在被封的時候等於雪上加霜
+  let r = null;
+  for (let i = 0; i < 3; i++) {
+    r = await fetch('https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(q),
+      { headers: { 'User-Agent': UA, Accept: 'application/sparql-results+json' },
+        signal: AbortSignal.timeout(60000) });
+    if (r.ok) break;
+    if (i < 2) await nap(8000 * (i + 1));
+  }
   if (!r.ok) throw new Error('SPARQL HTTP ' + r.status);
   const rows = (await r.json()).results.bindings;
   // 同一個項目可能有多組座標，取第一組
