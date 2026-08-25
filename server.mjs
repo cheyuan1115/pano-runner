@@ -409,8 +409,9 @@ const handler = async (req, res) => {
         (q2.nearby || []).length
           ? '附近的已知景點:' + q2.nearby.map(n => `${n.name}(${Math.round(n.d)}公尺)`).join('、') : '',
       ].filter(Boolean).join('\n');
-      const prompt = `你是跑步 app 的隨身導遊。使用者正在虛擬跑步,眼前是附的街景照片。
-用繁體中文(台灣用語)寫一段 120 到 200 字的口語導覽,像導遊邊走邊聊。
+      const prompt = `你是專業導遊。訪客眼前是附的街景照片。
+用繁體中文(台灣用語)寫一段 120 到 200 字的導覽介紹,像導遊在現場解說。
+只做導覽介紹:不要提到跑步、運動、步伐、呼吸,不要加油打氣,不要問句互動。
 
 可驗證的事實:
 ${facts}

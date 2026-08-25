@@ -1306,7 +1306,11 @@ async function speak(lm) {
   const token = (S.sayToken = (S.sayToken || 0) + 1);
   const mine = () => token === S.sayToken;
 
-  S.watchLm = { lat: lm.lat, lng: lm.lng, name: lm.name };
+  // AI 導覽不要盯著點看。它的「座標」就是你喊介紹的位置 —— 繼續往前跑
+  // 那個點就落到身後,視角一直轉頭盯著身後 = 畫面反向滑動,
+  // 看起來像倒著走(使用者實測抓到的)。AI 段落保持看前方。
+  S.watchLm = String(lm.id).startsWith('ai:') ? null
+            : { lat: lm.lat, lng: lm.lng, name: lm.name };
   const bar = $('lm-bar'), pv = $('lm-photo');
   const layers = [pv.children[0], pv.children[1]];
   // 上一段的照片要先清掉，外框也要一起關掉。
@@ -1738,7 +1742,7 @@ async function aiGuide() {
   try {
     // 抓正前方畫面:先畫一幀,縮到 768 寬(Gemini 不需要更大)
     draw();
-    const w = 768, h = Math.round(cv.height / cv.width * 768);
+    const w = 640, h = Math.round(cv.height / cv.width * 640);   // 640 對街景辨識已足夠,快一截
     const c2 = document.createElement('canvas');
     c2.width = w; c2.height = h;
     c2.getContext('2d').drawImage(cv, 0, 0, w, h);
