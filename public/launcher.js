@@ -498,7 +498,8 @@ el('start').onclick = () => {
     mic: el('mic').checked ? '1' : '0',
     voice: el('voice').checked ? '1' : '0',
     narrate: el('narrate').checked ? '1' : '0',
-    ...(el('sakura') && el('sakura').checked ? { season: 'sakura' } : {}),
+    ...(el('sakura') && el('sakura').checked ? { season: 'sakura' }
+       : el('lockmonth') && el('lockmonth').value ? { months: el('lockmonth').value } : {}),
     run: '1',
   });
   location.href = '/run.html?' + p;

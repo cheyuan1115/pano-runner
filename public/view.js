@@ -255,7 +255,8 @@ const S = {
   // 櫻花模式：載入每顆全景時，不是 3–4 月拍的就自動切到時光機裡的春天版本。
   // 歷史全景有自己的連結圖（同一趟拍攝前後相連），所以整條路能在那個年代裡跑；
   // 鏈斷了會自然退回目前年代，下一顆再試著跳回春天。
-  season: null,                         // 'sakura' = 偏好 3–4 月
+  season: null,                         // 'sakura' = 偏好 4(3 備胎),月份鎖的糖衣
+  lockMonths: null,                     // [11] 或 [4,3]:街景自動切到這些月份的年代
   askNear: null,                        // 詢問中的景點最近曾經多近
   askAway: 0,                           // 連續幾次在拉開距離
   accepting: false,                     // 答應導覽後、路還沒找到的空窗期
@@ -396,15 +397,18 @@ async function load(P, panoId, heading) {
       { signal: AbortSignal.timeout(12000) })).json();
   } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; return false; }
   if (meta.error) { S.note = meta.error; return false; }
-  // 櫻花模式：這顆不是四月拍的、而且時光機裡有更好的春天版本 → 改載那顆。
+  // 月份鎖：這顆不是目標月份拍的、而且時光機裡有 → 改載那個月份的版本。
   // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
-  // **只有四月算數** —— 實測 2018/3 的鏈整條樹是光的（三月初根本還沒開），
-  // 三月只在完全沒有四月版本時當備胎。
-  if (S.season === 'sakura' && meta.date && meta.date[1] !== 4) {
+  // 櫻花模式是它的特例（[4,3]:四月優先,三月備胎 —— 實測 2018/3 整條
+  // 樹是光的,三月只能當備胎)。11 月鎖就是紅葉、2 月鎖就是雪。
+  if (S.lockMonths && meta.date && meta.date[1] !== S.lockMonths[0]) {
     const spring = (meta.eras || [])
-      .filter(e => e.month === 4 || (meta.date[1] !== 3 && e.month === 3))
-      // 四月優先，同月份取最新的（畫質較好）
-      .sort((a, b) => (b.month === 4) - (a.month === 4) || b.year - a.year)[0];
+      .filter(e => S.lockMonths.includes(e.month)
+                   && !(S.lockMonths.indexOf(e.month) >= S.lockMonths.indexOf(meta.date[1])
+                        && S.lockMonths.includes(meta.date[1])))
+      // 依月份優先序,同月取最新年份（畫質較好）
+      .sort((a, b) => S.lockMonths.indexOf(a.month) - S.lockMonths.indexOf(b.month)
+                      || b.year - a.year)[0];
     if (spring) {
       try {
         const m2 = await (await fetch('/api/meta?pano=' + encodeURIComponent(spring.id),
@@ -611,8 +615,9 @@ function drawInner() {
     `${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}   `
     + (isIndoor(m) ? `⚠ ${m.floor || '室內'}（${m.source || '?'}）` : '戶外')
     + (indoorIds.size ? `　避開 ${indoorIds.size} 顆` : '') + '\n'
-    + (S.season && S.cur?.meta?.date
-       ? `🌸 影像 ${S.cur.meta.date[0]}/${S.cur.meta.date[1]}   ` : '')
+    + (S.lockMonths && S.cur?.meta?.date
+       ? `${S.season === 'sakura' ? '🌸' : '📅'} 影像 ${S.cur.meta.date[0]}/${S.cur.meta.date[1]}`
+         + `（鎖 ${S.lockMonths.join('/')}月）   ` : '')
     + `朝向 ${Math.round((S.heading % 360 + 360) % 360)}°   `
     + (S.proj === 'pan'
        ? `${S.paniniD < 0 ? '圓柱' : 'Panini d=' + S.paniniD.toFixed(1)} 水平 ${S.span}°　`
@@ -803,9 +808,10 @@ async function fillLoop() {
       // 櫻花模式的年代黏著：連結圖在路口會跨年代相連，選路只看方位不知道
       // 年代 —— 實測造幣局的櫻花隧道跑兩步就被接到 2015/3 的無花鏈。
       // 預抓完才知道日期：上一顆是四月、這顆不是 → 拉黑這條連結、退掉重選。
-      if (S.season === 'sakura' && eraAvoid.size < 40) {
+      if (S.lockMonths && eraAvoid.size < 40) {
         const prevM = queue.length >= 2 ? queue[queue.length - 2].P.meta : S.cur?.meta;
-        if (prevM?.date?.[1] === 4 && last.P.meta.date && last.P.meta.date[1] !== 4) {
+        if (prevM?.date && S.lockMonths.includes(prevM.date[1])
+            && last.P.meta.date && !S.lockMonths.includes(last.P.meta.date[1])) {
           eraAvoid.add(last.link.id);
           last.P.dead = true;
           queue.pop();
@@ -2387,6 +2393,8 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('mini') === '0') S.mini = false;
   if (q.get('mmvr') === '1') S.mmvrTest = true;
   if (q.get('season')) S.season = q.get('season');
+  if (S.season === 'sakura') S.lockMonths = [4, 3];   // 四月優先,三月備胎
+  if (q.get('months')) S.lockMonths = q.get('months').split(',').map(Number).filter(m => m >= 1 && m <= 12);
   if (q.get('targets')) {
     S.targets = q.get('targets').split('|').map(t => {
       const [la, ln] = t.split(',').map(Number);
