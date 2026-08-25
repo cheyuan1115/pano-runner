@@ -43,6 +43,7 @@ const WIKI_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.wikicache'
 const MAP_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '.maptiles');
 // 當場生成的語音,只留記憶體(使用者的決定:免費額度用不完,不必落地)
 const ttsMem = new Map();
+const geoMem = new Map();          // 反向地理編碼快取(同一格不重查)
 
 // 維基查詢一趟要打六到八次 API，連著打一定 429（實測第二個城市就中）。
 // 所以一定要快取。用約 1.1 公里見方的格子當鍵 —— 跑步時位置一直在動，
@@ -371,6 +372,75 @@ const handler = async (req, res) => {
         ttsMem.set(id, out);
         if (ttsMem.size > 40) ttsMem.delete(ttsMem.keys().next().value);
         return json(res, out);
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+    }
+    // AI 即時導覽:沒有內建景點時,傳「目前畫面 + 位置事實包」給 Gemini,
+    // 讓它生成導遊稿。鐵律寫死在提示詞裡:只能講事實包裡有的專有名詞,
+    // 認不出的建築只能描述外觀,不准命名 —— 位置資料負責「是什麼」,
+    // 畫面負責「看起來如何」,AI 只做串接潤飾,不做辨認。
+    if (u.pathname === '/api/aiguide' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 900000) break; }
+      let q2;
+      try { q2 = JSON.parse(body); } catch { return json(res, { error: '格式' }, 400); }
+      let gkey;
+      try { gkey = (await readFile(join(process.env.HOME, '.keys', 'geminikey'), 'utf8')).trim(); }
+      catch { return json(res, { error: 'AI 導覽需要 Gemini 金鑰（~/.keys/geminikey）' }, 500); }
+      // 街道名:OSM 反向地理編碼(免費、快取)。查不到就算了,不擋主流程。
+      let street = '';
+      const gk = q2.lat.toFixed(3) + ',' + q2.lng.toFixed(3);
+      if (geoMem.has(gk)) street = geoMem.get(gk);
+      else {
+        try {
+          const g = await (await fetch('https://nominatim.openstreetmap.org/reverse?format=json'
+            + `&lat=${q2.lat}&lon=${q2.lng}&zoom=17&accept-language=zh-TW`,
+            { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(4000) })).json();
+          const a = g.address || {};
+          street = [a.road, a.suburb || a.neighbourhood, a.city || a.town, a.country]
+            .filter(Boolean).join('、');
+          geoMem.set(gk, street);
+          if (geoMem.size > 500) geoMem.delete(geoMem.keys().next().value);
+        } catch {}
+      }
+      const facts = [
+        `座標:${q2.lat.toFixed(5)}, ${q2.lng.toFixed(5)}`,
+        street ? `位置:${street}` : '',
+        q2.date ? `街景拍攝時間:${q2.date[0]} 年 ${q2.date[1]} 月` : '',
+        (q2.nearby || []).length
+          ? '附近的已知景點:' + q2.nearby.map(n => `${n.name}(${Math.round(n.d)}公尺)`).join('、') : '',
+      ].filter(Boolean).join('\n');
+      const prompt = `你是跑步 app 的隨身導遊。使用者正在虛擬跑步,眼前是附的街景照片。
+用繁體中文(台灣用語)寫一段 120 到 200 字的口語導覽,像導遊邊走邊聊。
+
+可驗證的事實:
+${facts}
+
+鐵律:
+1. 只能說出「事實」清單裡出現過的專有名詞。清單裡沒有的建築或店家,一律不准命名。
+2. 照片裡認不出的東西,只能描述看得到的(建築風格、材質、街道氛圍),不准猜名字。
+3. 不確定的就往這一區的歷史或文化脈絡講,不要編造具體年份或人名。
+4. 不要用「這張照片」「這個畫面」開頭,直接像在現場說話。
+${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' + q2.recent.join(' / ') : ''}`;
+      try {
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=' + gkey, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [
+              { text: prompt },
+              { inline_data: { mime_type: 'image/jpeg', data: q2.img } },
+            ] }],
+            // maxOutputTokens 要放大:這款模型會先「思考」,思考也算輸出額度,
+            // 給太少的話正文會被截掉(thinkingConfig 它不收,實測 invalid argument)
+            generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
+          }), signal: AbortSignal.timeout(25000),
+        });
+        const j = await r.json();
+        // 過濾思考段(part.thought = true)—— 新模型會思考,不濾的話
+        // 內部草稿會混進導覽稿(實測唸出「Drafting text in...」)
+        const text = j.candidates?.[0]?.content?.parts
+          ?.filter(p2 => !p2.thought).map(p2 => p2.text || '').join('').trim();
+        if (!text) return json(res, { error: (j.error?.message || 'AI 沒有回應').slice(0, 150) }, 502);
+        return json(res, { text });
       } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
     }
     // 語音黑盒子。辨識這一段沒辦法從我這邊重現（我沒有辦法對麥克風講話），

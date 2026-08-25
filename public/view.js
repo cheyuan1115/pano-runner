@@ -1727,6 +1727,44 @@ function headPace(pose, t) {
   HB.at = Date.now();
 }
 
+// ── AI 即時導覽 ──────────────────────────────────────────
+// 沒有內建景點時說「介紹」:抓正前方畫面 + 位置事實包 → Gemini 生成
+// 導遊稿 → 走現有的 TTS+字幕管線播出來。最近講過的三段一起送,防重複。
+const AIG = { recent: [], busy: false };
+async function aiGuide() {
+  if (AIG.busy || S.speaking || !S.cur?.meta) return;
+  AIG.busy = true;
+  S.note = '🤖 AI 看了一眼，正在想怎麼介紹…'; draw();
+  try {
+    // 抓正前方畫面:先畫一幀,縮到 768 寬(Gemini 不需要更大)
+    draw();
+    const w = 768, h = Math.round(cv.height / cv.width * 768);
+    const c2 = document.createElement('canvas');
+    c2.width = w; c2.height = h;
+    c2.getContext('2d').drawImage(cv, 0, 0, w, h);
+    const img = c2.toDataURL('image/jpeg', 0.72).split(',')[1];
+    const m = S.cur.meta;
+    const nearby = (S.nearby || []).slice(0, 5)
+      .map(l => ({ name: l.name, d: distM(m, l) }));
+    const r = await fetch('/api/aiguide', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: m.lat, lng: m.lng, heading: S.heading,
+        date: m.date || null, nearby, img, recent: AIG.recent }),
+      signal: AbortSignal.timeout(30000) });
+    const j = await r.json();
+    if (!j.text) { S.note = '🤖 ' + (j.error || 'AI 沒回應'); draw(); return; }
+    window.__aigText = j.text;
+    AIG.recent.push(j.text.slice(0, 60));
+    if (AIG.recent.length > 3) AIG.recent.shift();
+    const lines = (j.text.match(/[^。！？!?]+[。！？!?]?/g) || [j.text])
+      .map(t => t.trim()).filter(t => t.length > 1);
+    S.note = '';
+    speak({ id: 'ai:' + Date.now(), name: 'AI 導覽', lat: m.lat, lng: m.lng,
+            script: j.text, lines, marks: [], photos: [], audio: '' });
+  } catch (e) { S.note = '🤖 AI 導覽失敗：' + String(e.message || e).slice(0, 40); draw(); }
+  finally { AIG.busy = false; }
+}
+
 // ── 手把搖桿轉彎(VR)──────────────────────────────────────
 // 視線轉彎實測不好用(看風景就誤觸、要持續盯很累)。改用搖桿:
 //   往左/右撥過 65% → 下個路口轉那邊(回中才重新武裝,不連發)
@@ -2256,7 +2294,8 @@ async function lateralHop(side) {
 window.__turn = (cmd, text) => {
   if (cmd === 'guide') {
     acceptGuide().then(ok => {
-      if (!ok) { S.note = '（現在沒有可以導覽的景點）'; draw(); }
+      // 有景點講景點(資料庫的稿子比 AI 穩);沒有景點就問 AI
+      if (!ok) aiGuide();
     });
     return;
   }
