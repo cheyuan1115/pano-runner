@@ -868,6 +868,8 @@ const dropQueue = () => {
 
 async function stepOnce() {
   const seq = S.turnSeq;
+  // 倒帶閘:AI 導覽倒帶期間,前進迴圈在這裡等(進行中的那一步會走完才輪到這)
+  while (S.hold && S.running) { await sleep(100); }
   const _t0 = Date.now();
   if (!queue.length) {
     await fillQueue();
@@ -966,6 +968,10 @@ async function stepOnce() {
     mv: Math.round(S.moved), wait: Math.round(S.lastMs), q: queue.length });
   if (S.stepLog.length > 60) S.stepLog.shift();           // 這次轉場的實際畫格率
 
+  if (S.cur && S.cur.meta) {
+    RW.trail.push({ id: S.cur.meta.pano, d, dir: aimHead });
+    if (RW.trail.length > 60) RW.trail.shift();
+  }
   S.cur = P; S.nxt = null; S.mix = 0; S.tMove = 0;
   updateAttr();
   // 這一步進行中如果下過轉向指令，就不要用舊連結的角度覆寫方向
@@ -1735,6 +1741,63 @@ function headPace(pose, t) {
 // 沒有內建景點時說「介紹」:抓正前方畫面 + 位置事實包 → Gemini 生成
 // 導遊稿 → 走現有的 TTS+字幕管線播出來。最近講過的三段一起送,防重複。
 const AIG = { recent: [], busy: false };
+
+// ── AI 導覽的倒帶 ────────────────────────────────────────
+// 從喊「介紹」到開播要等 8~12 秒,等到開播人已經跑過想介紹的東西了。
+// 解法(使用者提的):等待期間沿剛跑過的路「倒帶」,語音好了再往前跑,
+// 開播的瞬間剛好回到喊介紹的位置附近,聽著介紹重新跑向它。
+// 不固定倒幾秒 —— 倒到準備好為止(延遲不穩,固定秒數會對不準)。
+// 幾何上就是把 tMove 跑負的:相機沿 uTravel 後退,shader 是純世界座標,
+// 負值天生成立。倒帶段里程要扣掉(前進重跑會再加回來,淨值才對)。
+const RW = { trail: [] };
+async function rewindFor(pending) {
+  if (!S.running) { await pending.catch(() => {}); return; }
+  let ready = false;
+  pending.then(() => ready = true, () => ready = true);
+  S.hold = true;                    // 先關閘,再等進行中的那一步走完
+  try {
+    while (S.anim) await sleep(80);
+    await sleep(120);
+    dropQueue();                    // 舊佇列是往前的預抓,倒帶完位置變了,作廢
+    const t0 = Date.now();
+    let resumeDir = null;
+    while (!ready && Date.now() - t0 < 9000 && RW.trail.length) {
+      const e = RW.trail.pop();
+      const P = await followPano(e.id, S.heading);
+      if (!P || !P.meta) break;
+      resumeDir = e.dir;
+      S.note = '⏪ 倒帶回你喊介紹的地方…'; 
+      // 倒帶速度照目前配速稍快一點(0.7 倍步時),圖磚全在快取,不會黑閃
+      const span = Math.max(400, Math.min(2500,
+        e.d / Math.max(2, S.kmh / 3.6) * 1000 * 0.7));
+      S.travelDir = e.dir;          // 這一步的世界座標軸要用「當時那一步」的方向
+      S.nxt = P; S.stepD = -e.d;
+      S.sceneR = Math.max(6, e.d / (1 - 1 / Math.max(1.05, S.zoomPer)));
+      const DISS = Math.min(0.5, (xr.session ? 90 : S.dissolveMs) / span);
+      S.anim = true;                // 動畫期間 heading 歸 tick 管,別人別碰
+      await new Promise(res => {
+        const t = performance.now();
+        const tick = () => {
+          const k = Math.min(1, (performance.now() - t) / span);
+          S.tMove = -e.d * k;       // 負的 = 後退
+          S.mix = Math.max(0, Math.min(1, (k - (0.5 - DISS / 2)) / DISS));
+          draw();
+          k < 1 ? (xr.session ? xr.session.requestAnimationFrame(tick)
+                              : requestAnimationFrame(tick))
+                : (S.anim = false, res());
+        };
+        tick();
+      });
+      S.cur = P; S.nxt = null; S.mix = 0; S.tMove = 0;
+      S.moved = Math.max(0, S.moved - e.d);   // 倒帶不計里程
+      if (S.track.length) S.track.pop();      // GPX 也退掉,重跑時再記
+      updateAttr();
+    }
+    if (resumeDir != null) S.travelDir = resumeDir;  // 恢復前進 = 重走剛倒的路
+    S.note = '';
+    fillQueue();
+  } finally { S.hold = false; }
+}
 async function aiGuide() {
   if (AIG.busy || S.speaking || !S.cur?.meta) return;
   AIG.busy = true;
@@ -1750,21 +1813,31 @@ async function aiGuide() {
     const m = S.cur.meta;
     const nearby = (S.nearby || []).slice(0, 5)
       .map(l => ({ name: l.name, d: distM(m, l) }));
-    const r = await fetch('/api/aiguide', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat: m.lat, lng: m.lng, heading: S.heading,
-        date: m.date || null, nearby, img, recent: AIG.recent }),
-      signal: AbortSignal.timeout(30000) });
-    const j = await r.json();
+    // 整串等待(Gemini 生稿 + TTS 合成)包成一個 pending,倒帶蓋住全程,
+    // 倒帶一結束 speak() 裡的 ttsFor 直接命中快取,秒開播
+    const req = (async () => {
+      const r = await fetch('/api/aiguide', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: m.lat, lng: m.lng, heading: S.heading,
+          date: m.date || null, nearby, img, recent: AIG.recent }),
+        signal: AbortSignal.timeout(30000) });
+      const j = await r.json();
+      if (!j.text) return { j };
+      const lines = (j.text.match(/[^。！？!?]+[。！？!?]?/g) || [j.text])
+        .map(t => t.trim()).filter(t => t.length > 1);
+      const lm = { id: 'ai:' + Date.now(), name: 'AI 導覽', lat: m.lat, lng: m.lng,
+                   script: j.text, lines, marks: [], photos: [], audio: '' };
+      await ttsFor(lm).catch(() => {});
+      return { j, lm };
+    })();
+    await rewindFor(req);
+    const { j, lm } = await req;
     if (!j.text) { S.note = '🤖 ' + (j.error || 'AI 沒回應'); draw(); return; }
     window.__aigText = j.text;
     AIG.recent.push(j.text.slice(0, 60));
     if (AIG.recent.length > 3) AIG.recent.shift();
-    const lines = (j.text.match(/[^。！？!?]+[。！？!?]?/g) || [j.text])
-      .map(t => t.trim()).filter(t => t.length > 1);
     S.note = '';
-    speak({ id: 'ai:' + Date.now(), name: 'AI 導覽', lat: m.lat, lng: m.lng,
-            script: j.text, lines, marks: [], photos: [], audio: '' });
+    speak(lm);
   } catch (e) { S.note = '🤖 AI 導覽失敗：' + String(e.message || e).slice(0, 40); draw(); }
   finally { AIG.busy = false; }
 }
