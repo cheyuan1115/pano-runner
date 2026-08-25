@@ -623,6 +623,9 @@ function drawInner() {
       + (S.mic ? `　🎙${window.__cad?.spm ? Math.round(window.__cad.spm) : '…'}` : '')
       + (S.voice ? `　🗣${voiceState()}` : '')
       + (S.watchLm ? `　👁 盯著 ${S.watchLm.name}` : '')
+      // 「跑到○○」之後最想一眼看到的就是還剩幾公尺,收摺列也要有
+      + (S.target ? `　⌖ ${S.target.lm ? S.target.lm.name : `第 ${S.targetNo} 點`}`
+         + ` ${Math.round(distM(m, S.target))} m` : '')
     + (S.speaking ? `　🔊 ${S.nowSpeaking}`
          : S.nextLm ? `　🎧 ${S.nextLm.name} ${Math.round(S.nextLm.d)} m` : '')
       + (S.note ? `　${S.note}` : '');
@@ -658,7 +661,8 @@ function drawInner() {
     + (S.watchLm ? `　👁 盯著 ${S.watchLm.name}` : '')
     + (S.speaking ? `　🔊 ${S.nowSpeaking}`
        : S.nextLm ? `　🎧 ${S.nextLm.name} ${Math.round(S.nextLm.d)} m` : '')
-    + (S.target ? `　⌖ 第 ${S.targetNo} 點 ${Math.round(distM(S.cur.meta, S.target))} m`
+    + (S.target ? `　⌖ ${S.target.lm ? S.target.lm.name : `第 ${S.targetNo} 點`}`
+       + ` ${Math.round(distM(S.cur.meta, S.target))} m`
        + (S.targets.length ? `（還有 ${S.targets.length} 個）` : '') : '')
     + (S.track.length ? `　紀錄 ${S.track.length} 點（按 s 匯出 GPX）` : '') + '\n'
     + `這顆 ${S.cur.tiles} 塊　等 ${Math.round(S.lastMs)} ms　排隊 ${queue.length}　`
@@ -2175,7 +2179,7 @@ async function detourTo(lm) {
   } catch {}
   S.target = t;
   S.bestToTarget = Infinity; S.targetSetAt = S.moved; S.bestAt = S.moved;
-  S.note = `⌖ 往 ${lm.name} 去`;
+  S.note = `⌖ 往 ${lm.name} 去,約 ${Math.round(distM(S.cur.meta, t))} 公尺`;
   S.accepting = false;
   dropQueue(); fillQueue(); draw();
 }
