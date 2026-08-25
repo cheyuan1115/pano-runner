@@ -49,6 +49,7 @@ const geoMem = new Map();          // 反向地理編碼快取(同一格不重�
 // 所以一定要快取。用約 1.1 公里見方的格子當鍵 —— 跑步時位置一直在動，
 // 不切格子的話每走十公尺就是一次全新查詢。
 const cellKey = (lat, lng) => `${Math.round(lat * 90)}_${Math.round(lng * 90)}`;
+const xlMem = new Map();   // 地名翻譯快取:星巴克→Starbucks
 const wikiMem = new Map();
 const wikiBusy = new Map();
 
@@ -165,6 +166,65 @@ const handler = async (req, res) => {
       return json(res, { n: hit.length, items: hit.slice(0, 400) });
     }
     // 附近的景點（跑步時用），依距離排序，附上導覽稿長度與音檔路徑
+    // 「跑到○○」的第三層:維基找不到時搜 OSM 地圖(Nominatim)。
+    // bounded=1 + viewbox 限在附近 ~3 公里,不然「凱旋門」會搜到全世界。
+    // 名字要真的對得上才算(雙向包含)—— Nominatim 模糊比對太寬,
+    // 實測搜「星巴克」回了只對到一個「星」字的共同工作空間。
+    // 對不上就請 Gemini 把名字翻成當地通用名稱再搜一次(翻過的記在 xlMem,
+    // 免費額度有每分鐘上限,同名不重問)。
+    if (u.pathname === '/api/findplace') {
+      const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
+      const q = (u.searchParams.get('q') || '').trim();
+      if (!isFinite(lat) || !isFinite(lng) || !q) return json(res, { error: '要 ll 和 q' }, 400);
+      try {
+        const vb = 0.03;
+        const toRad = x => x * Math.PI / 180;
+        const dOf = r2 => {
+          const dp = toRad(+r2.lat - lat), dl = toRad(+r2.lon - lng);
+          const h = Math.sin(dp / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(+r2.lat)) * Math.sin(dl / 2) ** 2;
+          return 2 * 6371000 * Math.asin(Math.sqrt(h));
+        };
+        const search = async term => {
+          const rows = await (await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2'
+            + '&limit=5&accept-language=zh-TW&q=' + encodeURIComponent(term)
+            + `&viewbox=${lng - vb},${lat + vb},${lng + vb},${lat - vb}&bounded=1`,
+            { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(6000) })).json();
+          return rows.map(r2 => ({
+            id: 'osm:' + r2.osm_type + r2.osm_id,
+            name: r2.name || (r2.display_name || '').split(',')[0],
+            lat: +r2.lat, lng: +r2.lon, d: dOf(r2), ai: true,
+          })).filter(x => x.name).sort((x, y) => x.d - y.d);
+        };
+        const norm = t => (t || '').replace(/[\s。，、！？.,!?]/g, '').toLowerCase();
+        const match = (list, term) => list.filter(x =>
+          norm(x.name).includes(norm(term)) || norm(term).includes(norm(x.name)));
+        let items = match(await search(q), q);
+        console.log(`地名搜尋:「${q}」直搜 ${items.length} 個`);
+        if (!items.length) {
+          let t2 = xlMem.get(q);
+          if (t2 === undefined) {
+            try {
+              const gkey = (await readFile(join(process.env.HOME, '.keys', 'geminikey'), 'utf8')).trim();
+              const g = await (await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=' + gkey, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                signal: AbortSignal.timeout(10000),
+                body: JSON.stringify({ contents: [{ parts: [{ text:
+                  `「${q}」這個地點/店家名稱,在座標 ${lat.toFixed(2)},${lng.toFixed(2)} 一帶的地圖上`
+                  + '最可能用什麼名稱標示?只回那個名稱本身,不要任何說明。' }] }],
+                  // 2048:這款模型的思考也算輸出額度,512 常被思考吃光,正文變空
+                  generationConfig: { temperature: 0, maxOutputTokens: 2048 } }) })).json();
+              t2 = (g.candidates?.[0]?.content?.parts || [])
+                .filter(p2 => !p2.thought).map(p2 => p2.text || '').join('').trim();
+              console.log(`地名翻譯:「${q}」→「${t2}」`
+                + (t2 ? '' : ' 原始回應:' + JSON.stringify(g).slice(0, 200)));
+              if (t2 && t2.length < 60) xlMem.set(q, t2);
+            } catch (e) { console.log('地名翻譯失敗:' + (e.message || e)); }
+          }
+          if (t2) items = match(await search(t2), t2);
+        }
+        return json(res, { items });
+      } catch (e) { return json(res, { items: [], error: String(e.message || e) }); }
+    }
     if (u.pathname === '/api/nearby') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
       const rad = Number(u.searchParams.get('r')) || 400;

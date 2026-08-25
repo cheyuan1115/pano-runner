@@ -2202,6 +2202,16 @@ async function gotoLm(text) {
       { signal: AbortSignal.timeout(8000) });
     items = (await r.json()).items || [];
   } catch {}
+  if (!items.length) {
+    // 第三層:OSM 地圖搜尋。店家、車站、廣場這種沒維基條目的都在這層。
+    // 這種目的地沒有稿子,到了之後(maybeNarrate 的抵達分支)自動請 AI 介紹。
+    try {
+      // 這條慢:搜不到時會「搜→請 Gemini 翻當地名→再搜」,全程可到十幾秒
+      const r = await fetch(`/api/findplace?ll=${m.lat},${m.lng}&q=${encodeURIComponent(q)}`,
+        { signal: AbortSignal.timeout(20000) });
+      items = (await r.json()).items || [];
+    } catch {}
+  }
   if (!items.length) { S.note = `⚠ 3 公里內找不到「${q}」`; draw(); return; }
   detourTo(items[0]);                       // 已按距離排序,取最近的那個
 }
@@ -2234,7 +2244,7 @@ async function maybeNarrate(meta) {
   if (S.target && S.target.lm) {
     const lm = S.target.lm;
     const d = distM(meta, S.target);
-    if (d < 90) { endDetour(); speak(lm); return; }
+    if (d < 90) { endDetour(); lm.ai ? aiGuide() : speak(lm); return; }
     // 繞路放寬到 600 公尺沒進步才放棄 —— 景點常常要繞過街廓才到得了
     if (S.moved - S.bestAt > 600) {
       S.note = `⌖ ${lm.name} 過不去，繼續跑`;
