@@ -2154,10 +2154,7 @@ function showAsk(lm) {
 function hideAsk() { S.asking = null; $('lm-ask').classList.remove('on'); }
 
 // 接受導覽：把景點設成目前的目標，原本的目標記著，看完再回去
-async function acceptGuide() {
-  const lm = S.asking;
-  if (!lm) return false;
-  hideAsk();
+async function detourTo(lm) {
   // 這兩行不能少。下面要 await /api/find（最多 8 秒），那段時間裡
   // maybeNarrate 還會繼續跑：S.asking 已經清掉、S.target 又還沒設好，
   // 於是它看到「前方有個沒問過的景點」就把詢問框**再叫出來一次** ——
@@ -2180,7 +2177,33 @@ async function acceptGuide() {
   S.note = `⌖ 往 ${lm.name} 去`;
   S.accepting = false;
   dropQueue(); fillQueue(); draw();
+}
+async function acceptGuide() {
+  const lm = S.asking;
+  if (!lm) return false;
+  hideAsk();
+  await detourTo(lm);
   return true;
+}
+
+// 語音「跑到某景點」:在附近 3 公里找名字,找到就沿路跑過去,
+// 到了(90 公尺內)走既有的繞路抵達邏輯,自動播那個景點的導覽。
+async function gotoLm(text) {
+  const x = (text || '').replace(/[\s。，、！？.,!?]/g, '')
+    .replace(/^(小跑|跑步|嘿小跑)/, '').replace(/(吧|喔|囉|了|啦|一下)$/, '');
+  const mm = x.match(/^(跑到|跑去|前往)(.+)$/);
+  const q = mm ? mm[2] : x;
+  if (!q || q.length < 2 || !S.cur?.meta) return;
+  const m = S.cur.meta;
+  S.note = `⌖ 找「${q}」…`; draw();
+  let items = [];
+  try {
+    const r = await fetch(`/api/nearby?ll=${m.lat},${m.lng}&r=3000&q=${encodeURIComponent(q)}`,
+      { signal: AbortSignal.timeout(8000) });
+    items = (await r.json()).items || [];
+  } catch {}
+  if (!items.length) { S.note = `⚠ 3 公里內找不到「${q}」`; draw(); return; }
+  detourTo(items[0]);                       // 已按距離排序,取最近的那個
 }
 
 // 繞路結束（到了或到不了）—— 回到原本的目標
@@ -2375,6 +2398,7 @@ window.__turn = (cmd, text) => {
     return;
   }
   if (cmd === 'aiguide') { aiGuide(); return; }   // 「介紹」= 永遠問 AI
+  if (cmd === 'goto') { gotoLm(text); return; }    // 「跑到○○」= 找景點跑過去
   if (cmd === 'stop') { finishRun(text); return; }
   S.turnSeq++;
   if (cmd === 'back') {

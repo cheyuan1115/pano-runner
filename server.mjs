@@ -168,6 +168,11 @@ const handler = async (req, res) => {
     if (u.pathname === '/api/nearby') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
       const rad = Number(u.searchParams.get('r')) || 400;
+      // q=名字:語音「跑到某景點」用。比對雙向包含(辨識常少字/多字)。
+      const qn = (u.searchParams.get('q') || '').replace(/[\s。，、！？.,!?]/g, '').toLowerCase();
+      const nameHit = l => { if (!qn) return true;
+        const n = (l.name || '').replace(/\s/g, '').toLowerCase();
+        return n.includes(qn) || (qn.length >= 2 && qn.includes(n)); };
       if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
       const R = 6371000, toRad = x => x * Math.PI / 180;
       const dist2 = (a, b) => {
@@ -181,7 +186,7 @@ const handler = async (req, res) => {
         return 2 * R * Math.asin(Math.sqrt(h));
       };
       const near = LANDMARKS.map(l => ({ ...l, d: d2(l) })).filter(l => l.d <= rad)
-        .sort((a, b) => a.d - b.d).slice(0, 12);
+        .filter(nameHit).sort((a, b) => a.d - b.d).slice(0, 12);
       const hit = near
         .map(l => {
           const a = AUDIDX[l.id] || {};
@@ -200,9 +205,9 @@ const handler = async (req, res) => {
       // 人工資料只有 12 個城市。出了那幾個城市就整片空白 ——
       // 這時候補上維基的景點（全世界都有，繁體中文）。
       // 已經有三個以上人工景點就不補，那幾個城市的稿子比維基好念。
-      if (u.searchParams.get('wiki') !== '0' && near.length < 3) {
+      if (u.searchParams.get('wiki') !== '0' && (qn || near.length < 3)) {
         const w = (await wikiCell(lat, lng))
-          .map(x => ({ ...x, d: d2(x) })).filter(x => x.d <= rad)
+          .map(x => ({ ...x, d: d2(x) })).filter(x => x.d <= rad).filter(nameHit)
           // 跟人工景點太近的算同一個，不要重複播
           .filter(x => !near.some(l => d2(l) < 9999 && dist2(l, x) < 90))
           .sort((a, b) => a.d - b.d);
