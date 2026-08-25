@@ -50,6 +50,37 @@ const geoMem = new Map();          // 反向地理編碼快取(同一格不重�
 // 不切格子的話每走十公尺就是一次全新查詢。
 const cellKey = (lat, lng) => `${Math.round(lat * 90)}_${Math.round(lng * 90)}`;
 const xlMem = new Map();   // 地名翻譯快取:星巴克→Starbucks
+
+// Gemini 免費額度是「每個模型各自每天 20 次」(實測 429:
+// GenerateRequestsPerDayPerProjectPerModel-FreeTier, quota=20)。
+// 所以做成備援鏈:一款回錯(429/404/空稿)就換下一款,全輪完才放棄。
+// 回傳 {text, model} 或 null。
+async function genAI(models, body, timeoutMs = 20000) {
+  let gkey;
+  try { gkey = (await readFile(join(process.env.HOME, '.keys', 'geminikey'), 'utf8')).trim(); }
+  catch { return null; }
+  for (const mdl of models) {
+    try {
+      const g = await (await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs), body: JSON.stringify(body) })).json();
+      if (g.error) { console.log(`AI ${mdl}:${g.error.code}`); continue; }
+      const text = (g.candidates?.[0]?.content?.parts || [])
+        .filter(p2 => !p2.thought).map(p2 => p2.text || '').join('').trim();
+      if (text) return { text, model: mdl };
+      console.log(`AI ${mdl}:空稿`);
+    } catch (e) { console.log(`AI ${mdl}:` + (e.message || e)); }
+  }
+  return null;
+}
+// 看圖的導覽用完整 flash 系(各世代額度分開);翻譯是小事,用 lite 系,
+// 不跟導覽搶額度。
+// 3.7-flash 實測回應很慢(>25 秒),放最後當底
+const AI_VISION = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash',
+                   'gemini-3.5-flash-lite', 'gemini-3.7-flash'];
+const AI_TEXT = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite',
+                 'gemini-2.5-flash-lite', 'gemini-flash-lite-latest'];
+
 const wikiMem = new Map();
 const wikiBusy = new Map();
 
@@ -203,22 +234,13 @@ const handler = async (req, res) => {
         if (!items.length) {
           let t2 = xlMem.get(q);
           if (t2 === undefined) {
-            try {
-              const gkey = (await readFile(join(process.env.HOME, '.keys', 'geminikey'), 'utf8')).trim();
-              const g = await (await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=' + gkey, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                signal: AbortSignal.timeout(10000),
-                body: JSON.stringify({ contents: [{ parts: [{ text:
-                  `「${q}」這個地點/店家名稱,在座標 ${lat.toFixed(2)},${lng.toFixed(2)} 一帶的地圖上`
-                  + '最可能用什麼名稱標示?只回那個名稱本身,不要任何說明。' }] }],
-                  // 2048:這款模型的思考也算輸出額度,512 常被思考吃光,正文變空
-                  generationConfig: { temperature: 0, maxOutputTokens: 2048 } }) })).json();
-              t2 = (g.candidates?.[0]?.content?.parts || [])
-                .filter(p2 => !p2.thought).map(p2 => p2.text || '').join('').trim();
-              console.log(`地名翻譯:「${q}」→「${t2}」`
-                + (t2 ? '' : ' 原始回應:' + JSON.stringify(g).slice(0, 200)));
-              if (t2 && t2.length < 60) xlMem.set(q, t2);
-            } catch (e) { console.log('地名翻譯失敗:' + (e.message || e)); }
+            const out = await genAI(AI_TEXT, { contents: [{ parts: [{ text:
+                `「${q}」這個地點/店家名稱,在座標 ${lat.toFixed(2)},${lng.toFixed(2)} 一帶的地圖上`
+                + '最可能用什麼名稱標示?只回那個名稱本身,不要任何說明。' }] }],
+                generationConfig: { temperature: 0, maxOutputTokens: 2048 } }, 12000);
+            t2 = out ? out.text : '';
+            console.log(`地名翻譯:「${q}」→「${t2}」` + (out ? `(${out.model})` : ''));
+            if (t2 && t2.length < 60) xlMem.set(q, t2);
           }
           if (t2) items = match(await search(t2), t2);
         }
@@ -448,9 +470,6 @@ const handler = async (req, res) => {
       for await (const c of req) { body += c; if (body.length > 900000) break; }
       let q2;
       try { q2 = JSON.parse(body); } catch { return json(res, { error: '格式' }, 400); }
-      let gkey;
-      try { gkey = (await readFile(join(process.env.HOME, '.keys', 'geminikey'), 'utf8')).trim(); }
-      catch { return json(res, { error: 'AI 導覽需要 Gemini 金鑰（~/.keys/geminikey）' }, 500); }
       // 街道名:OSM 反向地理編碼(免費、快取)。查不到就算了,不擋主流程。
       let street = '';
       const gk = q2.lat.toFixed(3) + ',' + q2.lng.toFixed(3);
@@ -489,27 +508,17 @@ ${facts}
 3. 不確定的就往這一區的歷史或文化脈絡講,不要編造具體年份或人名。
 4. 不要用「這張照片」「這個畫面」開頭,直接像在現場說話。
 ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' + q2.recent.join(' / ') : ''}`;
-      try {
-        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=' + gkey, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [
-              { text: prompt },
-              { inline_data: { mime_type: 'image/jpeg', data: q2.img } },
-            ] }],
-            // maxOutputTokens 要放大:這款模型會先「思考」,思考也算輸出額度,
-            // 給太少的話正文會被截掉(thinkingConfig 它不收,實測 invalid argument)
-            generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
-          }), signal: AbortSignal.timeout(25000),
-        });
-        const j = await r.json();
-        // 過濾思考段(part.thought = true)—— 新模型會思考,不濾的話
-        // 內部草稿會混進導覽稿(實測唸出「Drafting text in...」)
-        const text = j.candidates?.[0]?.content?.parts
-          ?.filter(p2 => !p2.thought).map(p2 => p2.text || '').join('').trim();
-        if (!text) return json(res, { error: (j.error?.message || 'AI 沒有回應').slice(0, 150) }, 502);
-        return json(res, { text });
-      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+      // 思考段過濾與 429 換模型都在 genAI 裡。maxOutputTokens 要放大:
+      // 這系列模型會先「思考」,思考也算輸出額度,太少正文會被截掉。
+      const out = await genAI(AI_VISION, {
+        contents: [{ parts: [
+          { text: prompt },
+          { inline_data: { mime_type: 'image/jpeg', data: q2.img } },
+        ] }],
+        generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
+      }, 25000);
+      if (!out) return json(res, { error: '今天的 AI 額度用完了(每模型每天 20 次,已全輪過)' }, 502);
+      return json(res, { text: out.text });
     }
     // 語音黑盒子。辨識這一段沒辦法從我這邊重現（我沒有辦法對麥克風講話），
     // 所以讓瀏覽器把每個事件送回來記著，才有辦法分辨是

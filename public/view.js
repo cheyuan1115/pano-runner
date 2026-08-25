@@ -1820,7 +1820,8 @@ async function aiGuide() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lat: m.lat, lng: m.lng, heading: S.heading,
           date: m.date || null, nearby, img, recent: AIG.recent }),
-        signal: AbortSignal.timeout(30000) });
+        // 60 秒:伺服器端會在多款模型間輪備援(額度 429 就換下一款),整串可能很久
+        signal: AbortSignal.timeout(60000) });
       const j = await r.json();
       if (!j.text) return { j };
       const lines = (j.text.match(/[^。！？!?]+[。！？!?]?/g) || [j.text])
