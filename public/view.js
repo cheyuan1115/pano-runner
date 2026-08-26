@@ -188,6 +188,11 @@ const mkTex = () => {
 const BASE_ZOOM = 2;
 // 角色要在建立 BroadcastChannel 之前就決定，所以先從網址讀
 const Q0 = new URLSearchParams(location.search);
+// 英文模式:lang=en 強制,沒帶就看瀏覽器語言(非中文 → 英文)。
+// 語音指令維持中文(那是辨識詞表,不是介面)。
+const EN_UI = Q0.get('lang') === 'en'
+  || (!Q0.get('lang') && !/^zh/.test(navigator.language || ''));
+const T = (zh, en) => EN_UI ? en : zh;
 const rad = x => x * Math.PI / 180;
 const ad = (a, b) => ((a - b) % 360 + 540) % 360 - 180;
 
@@ -914,10 +919,10 @@ async function stepOnce() {
     S.kmh = read();
     // 停住的時候不要一直丟出轉場，等訊號回來
     while (S.running && S.kmh < 1.5 && paceSrc()) {
-      S.note = paceSrc() === 'stick' ? '⏸ 搖桿放開了（前推就走）'
-             : paceSrc() === 'hand' ? '⏸ 手停了，畫面停住（擺手就走）'
-             : paceSrc() === 'head' ? '⏸ 腳步停了，畫面停住（原地踏步就走）'
-             : '⏸ 沒有腳步聲，畫面停住';
+      S.note = paceSrc() === 'stick' ? T('⏸ 搖桿放開了（前推就走）', '⏸ Stick released — push forward to run')
+             : paceSrc() === 'hand' ? T('⏸ 手停了，畫面停住（擺手就走）', '⏸ Hands stopped — swing to run')
+             : paceSrc() === 'head' ? T('⏸ 腳步停了，畫面停住（原地踏步就走）', '⏸ Steps stopped — jog in place to run')
+             : T('⏸ 沒有腳步聲，畫面停住', '⏸ No footsteps heard — paused');
       draw(); await sleep(400); S.kmh = read();
     }
     if (!S.running) return;
@@ -933,7 +938,8 @@ async function stepOnce() {
   // 超過上限就走快一點，寧可那一段稍微快轉，也不要停在原地二十秒。
   const want = d / Math.max(1, S.kmh / 3.6) * 1000;
   const span = Math.min(6000, Math.max(240, want));
-  if (want > 6000) S.note = `⏩ 這一段隔了 ${Math.round(d)} m，快轉通過`;
+  if (want > 6000) S.note = T(`⏩ 這一段隔了 ${Math.round(d)} m，快轉通過`,
+                              `⏩ ${Math.round(d)} m gap — fast-forwarding`);
   S.nxt = P; S.stepD = d;
   // 由這一步的實際距離與目標倍率算出場景半徑
   S.sceneR = Math.max(6, d / (1 - 1 / Math.max(1.05, S.zoomPer)));
@@ -1099,7 +1105,7 @@ function bcast() {
           // 被換算成 210°(單片攤 210°用),照抄到三片模式的中央片
           // 等於把 210° 塞進一片直線透視,整個畫面嚴重拉伸(實際反饋)
           S.prevHFov = S.hFovPer; S.hFovPer = 70;
-          S.note = '🖥 側屏已連線,本機改畫中間片';
+          S.note = T('🖥 側屏已連線,本機改畫中間片', '🖥 Side screen connected — this window shows the center panel');
           if (!S.running) reloadSoon();
         } else if (j.n === 0 && S.autoPanel) {
           S.panelIdx = null; S.autoPanel = false;
@@ -1908,7 +1914,7 @@ async function rewindFor(pending) {
       const P = await followPano(e.id, S.heading);
       if (!P || !P.meta) break;
       resumeDir = e.dir;
-      S.note = '⏪ 倒帶回你喊介紹的地方…'; 
+      S.note = T('⏪ 倒帶回你喊介紹的地方…', '⏪ Rewinding to where you asked…'); 
       // 倒帶速度照目前配速稍快一點(0.7 倍步時),圖磚全在快取,不會黑閃
       const span = Math.max(400, Math.min(2500,
         e.d / Math.max(2, S.kmh / 3.6) * 1000 * 0.7));
@@ -1943,7 +1949,7 @@ async function rewindFor(pending) {
 async function aiGuide() {
   if (AIG.busy || S.speaking || !S.cur?.meta) return;
   AIG.busy = true;
-  S.note = '🤖 AI 看了一眼，正在想怎麼介紹…'; draw();
+  S.note = T('🤖 AI 看了一眼，正在想怎麼介紹…', '🤖 AI is looking around, composing an intro…'); draw();
   try {
     // 抓正前方畫面:先畫一幀,縮到 768 寬(Gemini 不需要更大)
     draw();
@@ -1968,7 +1974,7 @@ async function aiGuide() {
       if (!j.text) return { j };
       const lines = (j.text.match(/[^。！？!?]+[。！？!?]?/g) || [j.text])
         .map(t => t.trim()).filter(t => t.length > 1);
-      const lm = { id: 'ai:' + Date.now(), name: 'AI 導覽', lat: m.lat, lng: m.lng,
+      const lm = { id: 'ai:' + Date.now(), name: T('AI 導覽', 'AI Guide'), lat: m.lat, lng: m.lng,
                    script: j.text, lines, marks: [], photos: [], audio: '' };
       await ttsFor(lm).catch(() => {});
       return { j, lm };
@@ -2176,9 +2182,11 @@ function updateAttr() {
   const el = document.getElementById('attr');
   if (!el) return;
   const d = S.cur?.meta?.date;
-  el.textContent = '影像 © Google 街景服務'
-    + (d ? `（${d[0]} 年 ${d[1]} 月拍攝）` : '')
-    + '　地圖 © OpenStreetMap／CARTO';
+  el.textContent = EN_UI
+    ? 'Imagery © Google Street View' + (d ? ` (captured ${d[1]}/${d[0]})` : '')
+      + '   Map © OpenStreetMap / CARTO'
+    : '影像 © Google 街景服務' + (d ? `（${d[0]} 年 ${d[1]} 月拍攝）` : '')
+      + '　地圖 © OpenStreetMap／CARTO';
 }
 
 // ── 左下角小地圖 ──────────────────────────────────────────────
@@ -2317,9 +2325,9 @@ function refreshNext(meta) {
 function showAsk(lm) {
   S.asking = lm;
   const el = $('lm-ask');
-  el.innerHTML = `<div class="t1">即將經過 ${lm.name}</div>`
-    + '<div class="t2">說「導覽」就跑過去介紹</div>'
-    + '<div class="t3">不用回答，繼續跑就好</div>';
+  el.innerHTML = `<div class="t1">${T('即將經過', 'Coming up:')} ${lm.name}</div>`
+    + `<div class="t2">${T('說「導覽」就跑過去介紹', 'Say 導覽 (or press G) for a guided detour')}</div>`
+    + `<div class="t3">${T('不用回答，繼續跑就好', 'No answer needed — just keep running')}</div>`;
   el.classList.add('on');
 }
 function hideAsk() { S.asking = null; $('lm-ask').classList.remove('on'); }
@@ -2345,7 +2353,8 @@ async function detourTo(lm) {
   } catch {}
   S.target = t;
   S.bestToTarget = Infinity; S.targetSetAt = S.moved; S.bestAt = S.moved;
-  S.note = `⌖ 往 ${lm.name} 去,約 ${Math.round(distM(S.cur.meta, t))} 公尺`;
+  S.note = T(`⌖ 往 ${lm.name} 去,約 ${Math.round(distM(S.cur.meta, t))} 公尺`,
+             `⌖ Heading to ${lm.name}, ~${Math.round(distM(S.cur.meta, t))} m`);
   S.accepting = false;
   dropQueue(); fillQueue(); draw();
 }
@@ -2517,7 +2526,8 @@ function nextTarget() {
     // 「點起點、點方向就開跑」的原始語意就是這樣:第二點是指方向,
     // 不是終點;跑到那裡就結束會把自由跑閹掉(使用者實測抱怨)。
     // 想結束隨時說「結束跑步」或按空白鍵。
-    S.note = '⌖ 路線跑完，繼續自由跑（說「結束跑步」停）';
+    S.note = T('⌖ 路線跑完，繼續自由跑（說「結束跑步」停）',
+               '⌖ Route done — free running (say 結束跑步 to stop)');
     saveTrack();
   }
 }

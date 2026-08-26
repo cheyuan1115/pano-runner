@@ -515,3 +515,67 @@ el('zout').onclick = () => zoomBy(-1);
 
 renderRuns();
 drawMap(); say();
+
+// ── 英文介面 ─────────────────────────────────────────────
+// lang=en 強制;沒帶就看瀏覽器語言。做法:整頁走一遍文字節點,
+// 對照字典換掉 —— 不動任何邏輯,中文版一個位元組都不變。
+(function () {
+  const q0 = new URLSearchParams(location.search);
+  const EN = q0.get('lang') === 'en'
+    || (!q0.get('lang') && !/^zh/.test(navigator.language || ''));
+  if (!EN) return;
+  document.title = 'pano-runner launcher';
+  const D = {
+    'pano-runner 啟動器': 'pano-runner launcher',
+    '找地方': 'Find a place', '搜尋': 'Search',
+    '速度': 'Speed',
+    '用麥克風聽跑步聲決定速度': 'Set speed from treadmill footsteps (mic)',
+    '上面的滑桿變成沒聽到腳步聲時的上限。跑步機的腳步聲要收得到。':
+      'The slider becomes the cap when no footsteps are heard.',
+    '景點導覽（到附近會問，說「導覽」才播）': 'Landmark narration (asks when nearby)',
+    '🌸 櫻花模式（自動切到 4 月的歷史街景）': '🌸 Sakura mode (April historical imagery)',
+    '📅 鎖定月份': '📅 Lock month', '（有歷史街景才切得過去）': '(needs historical imagery)',
+    '不限': 'Any', '10–11 月（紅葉）': 'Oct–Nov (autumn)', '12–2 月（雪景）': 'Dec–Feb (snow)',
+    '7–8 月（盛夏）': 'Jul–Aug (summer)',
+    '1 月': 'Jan', '2 月': 'Feb', '3 月': 'Mar', '4 月': 'Apr', '5 月': 'May', '6 月': 'Jun',
+    '7 月': 'Jul', '8 月': 'Aug', '9 月': 'Sep', '10 月': 'Oct', '11 月': 'Nov', '12 月': 'Dec',
+    '語音操控（左轉／右轉／回頭／導覽／結束跑步）': 'Voice control (zh-TW commands)',
+    '畫面': 'View', '解析度': 'Resolution',
+    '五片（接縫折角最小）': '5 panels', '三片': '3 panels', '單片': '1 panel',
+    '連續超廣角（Panini，無接縫）': 'Seamless ultra-wide (Panini)',
+    '3（省流量）': '3 (light)', '4（一般）': '4 (normal)', '5（最清晰）': '5 (sharpest)',
+    '跑過的路線': 'Past runs',
+    '先在地圖上點一下「起跑點」。': 'Click the map to set a start point.',
+    '開始跑': 'Start running', '重設': 'Reset',
+    '🌸 特色路線 ▸': '🌸 Special trails ▸',
+    '🗿馬丘比丘': '🗿 Machu Picchu', '🐫吉薩金字塔': '🐫 Giza Pyramids',
+    '🏚軍艦島廢墟': '🏚 Hashima ruins', '🐧南極': '🐧 Antarctica',
+    '🏔馬特洪冬景': '🏔 Matterhorn winter', '⛩伏見稻荷': '⛩ Fushimi Inari',
+    '🗻富士山吉田口': '🗻 Mt. Fuji trail', '💜富良野花田': '💜 Furano flowers',
+    '🌷庫肯霍夫': '🌷 Keukenhof', '🏔EBC聖母峰': '🏔 Everest BC trek',
+    '🏛佩特拉': '🏛 Petra', '🛶威尼斯': '🛶 Venice',
+    '🌸上野公園': '🌸 Ueno sakura', '🌸大阪造幣局': '🌸 Osaka Mint sakura',
+    '🌸高遠城址': '🌸 Takato sakura', '🌸千鳥ヶ淵': '🌸 Chidorigafuchi',
+    '香榭麗舍': 'Champs-Élysées', '塞納河畔': 'Seine riverside',
+    '河口湖大石公園': 'Lake Kawaguchi', '台北大安森林': 'Taipei Daan Park',
+    '紐約中央公園': 'NY Central Park', '京都鴨川': 'Kyoto Kamo River',
+  };
+  const walk = n => {
+    for (const c of n.childNodes) {
+      if (c.nodeType === 3) {
+        const t = c.textContent.trim();
+        if (D[t]) c.textContent = c.textContent.replace(t, D[t]);
+      } else walk(c);
+    }
+  };
+  walk(document.body);
+  const q = document.getElementById('q');
+  if (q) q.placeholder = 'Paris, Tokyo, Kyoto…';
+  const hint = document.getElementById('hint');
+  if (hint) hint.textContent = 'Drag = pan   pinch / ＋－ = zoom\n'
+    + '1st click = start point, further clicks add waypoints (run in order)\n'
+    + 'Orange dots are landmarks — click one to add it to the route';
+  // 之後動態塞進來的節點(快速選單重繪等)也翻一次
+  new MutationObserver(() => walk(document.body))
+    .observe(document.body, { childList: true, subtree: true });
+})();

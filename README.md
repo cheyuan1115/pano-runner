@@ -6,7 +6,9 @@ A self-hosted **virtual treadmill runner**: it renders Street View panoramas wit
 
 [![Buy Me a Coffee](https://img.shields.io/badge/☕_Buy_me_a_coffee-support_this_project-FFDD00?style=for-the-badge)](https://buymeacoffee.com/ericchen1115)
 
-![running view](docs/screenshot-run.png)
+![sakura run demo](docs/demo.gif)
+
+*Osaka Mint sakura tunnel, April 2012 historical imagery — one of the built-in "time machine" trails.*
 
 ## Why it exists
 
@@ -25,6 +27,9 @@ This is a personal research project. See [Data sources & fair use](#data-sources
 - **Multi-screen** — one master + side panels over BroadcastChannel (same machine) or SSE (any machine on your LAN: open `/left` and `/right`, zero config). Interpolation buffer makes Wi-Fi followers as smooth as local ones.
 - **Time machine** — lock the month (cherry-blossom April, autumn November, snow February) and the runner auto-switches to historical imagery where available; curated "rails" replay one continuous era end-to-end.
 - **GPX export** of every run.
+- **English & Traditional Chinese UI** — auto-detected from your browser (`?lang=en` to force).
+
+![running view](docs/screenshot-run.png)
 
 ![three-panel view](docs/screenshot-panels.png)
 

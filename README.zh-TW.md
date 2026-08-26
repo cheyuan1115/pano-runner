@@ -4,7 +4,9 @@
 
 [![Buy Me a Coffee](https://img.shields.io/badge/☕_請我喝咖啡-支持這個專案-FFDD00?style=for-the-badge)](https://buymeacoffee.com/ericchen1115)
 
-![跑步畫面](docs/screenshot-run.png)
+![櫻花 demo](docs/demo.gif)
+
+*大阪造幣局櫻花隧道,2012 年 4 月歷史街景——內建時光機軌道之一。*
 
 ## 為什麼要自己算圖
 
