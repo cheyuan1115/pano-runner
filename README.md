@@ -4,6 +4,8 @@ A self-hosted **virtual treadmill runner**: it renders Street View panoramas wit
 
 [繁體中文說明 → README.zh-TW.md](README.zh-TW.md)
 
+[![Buy Me a Coffee](https://img.shields.io/badge/☕_Buy_me_a_coffee-support_this_project-FFDD00?style=for-the-badge)](https://buymeacoffee.com/ericchen1115)
+
 ![running view](docs/screenshot-run.png)
 
 ## Why it exists
@@ -67,6 +69,10 @@ Things that were hard and are documented in code comments: shared-world dissolve
 - **TTS / Gemini** use your own API keys within your own quota.
 
 You are responsible for how you use this code.
+
+## Support
+
+If this project made your treadmill less boring: [Buy me a coffee ☕](https://buymeacoffee.com/ericchen1115)
 
 ## License
 

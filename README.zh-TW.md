@@ -2,6 +2,8 @@
 
 自架的**虛擬跑步系統**:自己抓街景全景圖磚、用自己的 WebGL 管線算圖——不用地圖 SDK、不用 iframe——變成一趟可以用語音、腳步聲或 VR 頭盔控制的第一人稱跑步。
 
+[![Buy Me a Coffee](https://img.shields.io/badge/☕_請我喝咖啡-支持這個專案-FFDD00?style=for-the-badge)](https://buymeacoffee.com/ericchen1115)
+
 ![跑步畫面](docs/screenshot-run.png)
 
 ## 為什麼要自己算圖
@@ -49,6 +51,10 @@ node server.mjs
 - **TTS 與 Gemini** 用你自己的金鑰、自己的額度。
 
 使用本程式碼的方式由你自行負責。
+
+## 支持
+
+如果這個專案讓你的跑步機不再無聊:[請我喝杯咖啡 ☕](https://buymeacoffee.com/ericchen1115)
 
 ## 授權
 
