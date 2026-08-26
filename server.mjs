@@ -60,7 +60,9 @@ let syncLast = null;
 // GenerateRequestsPerDayPerProjectPerModel-FreeTier, quota=20)。
 // 所以做成備援鏈:一款回錯(429/404/空稿)就換下一款,全輪完才放棄。
 // 回傳 {text, model} 或 null。
-async function genAI(models, body, timeoutMs = 20000) {
+// ok(text):驗收函式,不合格就換下一款(有些備援款會把逐字編號的
+// 草稿當正文吐出來 —— 實測字幕唸出「與 (127) 祭 (128) 典 (129)…」)
+async function genAI(models, body, timeoutMs = 20000, ok = null) {
   let gkey;
   try { gkey = (await readFile(join(process.env.HOME, '.keys', 'geminikey'), 'utf8')).trim(); }
   catch { return null; }
@@ -72,12 +74,19 @@ async function genAI(models, body, timeoutMs = 20000) {
       if (g.error) { console.log(`AI ${mdl}:${g.error.code}`); continue; }
       const text = (g.candidates?.[0]?.content?.parts || [])
         .filter(p2 => !p2.thought).map(p2 => p2.text || '').join('').trim();
-      if (text) return { text, model: mdl };
-      console.log(`AI ${mdl}:空稿`);
+      if (!text) { console.log(`AI ${mdl}:空稿`); continue; }
+      if (ok && !ok(text)) { console.log(`AI ${mdl}:稿不合格 ${text.slice(0, 60)}`); continue; }
+      return { text, model: mdl };
     } catch (e) { console.log(`AI ${mdl}:` + (e.message || e)); }
   }
   return null;
 }
+// 導覽稿的驗收:繁中為主、不得含 (127) 這種編號雜訊、不得大段英文
+const guideOk = t => {
+  const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
+  return cjk >= t.length * 0.45 && !/[（(]\d+[)）]/.test(t)
+      && !/Drafting|drafting|\*\*/.test(t);
+};
 // 看圖的導覽用完整 flash 系(各世代額度分開);翻譯是小事,用 lite 系,
 // 不跟導覽搶額度。
 // 3.7-flash 實測回應很慢(>25 秒),放最後當底
@@ -562,9 +571,11 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
           { inline_data: { mime_type: 'image/jpeg', data: q2.img } },
         ] }],
         generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
-      }, 25000);
+      }, 25000, guideOk);
       if (!out) return json(res, { error: '今天的 AI 額度用完了(每模型每天 20 次,已全輪過)' }, 502);
-      return json(res, { text: out.text });
+      // 最後保險:就算通過驗收,殘餘的編號雜訊也清掉
+      const clean = out.text.replace(/[（(]\d+[)）]\s*/g, '').replace(/\s{2,}/g, ' ').trim();
+      return json(res, { text: clean });
     }
     // 語音黑盒子。辨識這一段沒辦法從我這邊重現（我沒有辦法對麥克風講話），
     // 所以讓瀏覽器把每個事件送回來記著，才有辦法分辨是
