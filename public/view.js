@@ -1117,7 +1117,11 @@ async function followPano(id, head) {
   if (!P) {
     P = mkPano();
     followCache.set(id, P);
-    await load(P, id, head);
+    // 載入承諾要掛在物件上:預抓塞進快取後,主訊息命中快取拿到的
+    // 可能是「還在載」的半成品(meta 都沒有),直接端上台就是黑幀,
+    // 載完跳回正常 —— 像素偵測抓到的 A-B-A 閃爍就是它(d2=0)。
+    P.ready = load(P, id, head);
+    await P.ready;
     // 只留最近幾顆，免得貼圖把記憶體吃光
     while (followCache.size > 8) {
       const k = followCache.keys().next().value;
@@ -1128,29 +1132,31 @@ async function followPano(id, head) {
       followCache.delete(k);
     }
   }
+  await P.ready;          // 快取命中但還在載 → 等它載完再回
   return P;
 }
 
 let followBusy = false;
+let followWant = null;   // 主機「最新」的全景 id;載完發現已被超車就不要上台
 async function applySync(m) {
+  followWant = m.cur;
+  const pT = S.tMove, pM = S.mix;   // 換景空檔要凍結用,見下
   S.heading = m.heading; S.pitch = m.pitch; S.tMove = m.tMove; S.mix = m.mix;
-  // 側片的閃動抑制(實際反饋:左右畫面偶爾閃、轉彎更常)——
-  // 溶解期間兩顆全景疊著畫,側面視角的內容差異比正前方大得多,
-  // 260ms 的交叉淡化看起來就是閃一下。跟 VR 同一帖藥:
-  // 側片把溶解壓短 3 倍;這一步轉彎超過 25° 就不溶解,直接硬切。
-  if (S.panelIdx !== null && S.panelIdx !== 1) {
-    let mix = m.mix;
-    mix = Math.max(0, Math.min(1, (mix - 0.5) * 3 + 0.5));
-    if ((m.turn || 0) > 25) mix = mix > 0.5 ? 1 : 0;
-    S.mix = mix;
-  }
+  // 側片完全不溶解,永遠硬切。連拍抓到證據:側面視角視差太大,
+  // 任何混合幀都是雙重曝光鬼影(書報亭出現兩次),下一幀又乾淨 ——
+  // 那就是使用者看到的「閃」。壓短溶解只是讓鬼影變短,要就是不要有。
+  // 正前方(中片/主機)兩顆幾乎對齊,溶解照舊是順的。
+  // 幾何上兩顆全景在切點解到同一個世界點,硬切本來就接近無縫。
+  if (S.panelIdx !== null && S.panelIdx !== 1) S.mix = m.mix > 0.5 ? 1 : 0;
   // 這段一定要放在溶解抑制「之後」,不然定住的 mix 會被蓋回去(踩過)。
   // 主機已經換到新全景、這邊還沒載好的空檔(轉彎跳點最常見):
   // 新一步的位移/溶解套在「舊」全景上是錯的幾何,畫面會錯位閃一下,
   // 載入快就看不到,慢半拍就閃 —— 所以「不是每次」(實際反饋)。
   // 這段空檔把位移歸零定住舊畫面,新全景到了再繼續動。
   if (m.cur && S.cur && S.cur.meta && S.cur.meta.pano !== m.cur) {
-    S.tMove = 0; S.mix = 0;
+    // 凍結在「上一刻」的位移,不能歸零 —— 歸零等於在舊全景上
+    // 瞬間倒退一整步,那一下就是殘餘的閃(像素偵測抓到 d1=53)。
+    S.tMove = pT; S.mix = pM;
   }
   S.stepD = m.stepD; S.travelDir = m.travelDir; S.kmh = m.kmh;
   S.moved = m.moved; S.steps = m.steps; S.note = m.note; S.running = m.running;
@@ -1159,8 +1165,24 @@ async function applySync(m) {
     followBusy = true;
     try {
       if (m.pre) followPano(m.pre, m.travelDir);          // 先抓起來，不等它
-      if (m.cur && (!S.cur || S.cur.meta.pano !== m.cur)) S.cur = await followPano(m.cur, m.travelDir);
-      S.nxt = m.nxt ? (followCache.get(m.nxt) || await followPano(m.nxt, m.travelDir)) : null;
+      if (m.cur && (!S.cur || S.cur.meta.pano !== m.cur)) {
+        const P = await followPano(m.cur, m.travelDir);
+        // 載入的這一兩秒主機可能又走了(轉彎時全景換得快)。
+        // 把過時的全景端上來會閃一下再跳到正確的 —— 已被超車就丟掉,
+        // 下一則訊息會載最新的(busy 已釋放)。
+        if (P && followWant === m.cur) S.cur = P;
+        // 新全景上台的同一則訊息裡,位移還凍在舊全景的值(上面的凍結
+        // 是在載入完成前判斷的)—— 不重設的話新全景會先畫在一整步之後
+        // 再跳回來,反向又是一閃。上台了就套回這則訊息的真值。
+        if (S.cur && S.cur.meta && S.cur.meta.pano === m.cur) {
+          S.tMove = m.tMove;
+          S.mix = (S.panelIdx !== null && S.panelIdx !== 1)
+                ? (m.mix > 0.5 ? 1 : 0) : m.mix;
+        }
+      }
+      // nxt 也一律走 followPano(裡面會等載完)—— 直接拿快取一樣
+      // 可能拿到半成品,溶解時疊上去就是黑閃
+      S.nxt = m.nxt ? await followPano(m.nxt, m.travelDir) : null;
     } finally { followBusy = false; }
   }
   draw();
