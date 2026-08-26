@@ -1882,9 +1882,20 @@ function vrStick() {
 // 貼在視野下方偏中的面板(頭前 1.35 公尺,寬 1.15 公尺)。
 const SUB = { cv: null, ctx: null, tex: null, last: '', fresh: false };
 function subVrUpdate() {
-  if (!S.speaking) { SUB.last = ''; return; }
-  const name = S.nowSpeaking || '';
-  const line = ($('lm-text') && $('lm-text').textContent) || '';
+  // 沒在播報時,面板改當狀態列:顯示「跑到○○」的即時倒數
+  //(HUD 是 DOM,沉浸模式看不到,這裡是 VR 裡唯一的文字出口)。
+  // 距離取整十公尺當 key,才不會每步重畫 canvas。
+  SUB.mini = false;
+  let name, line;
+  if (S.speaking) {
+    name = S.nowSpeaking || '';
+    line = ($('lm-text') && $('lm-text').textContent) || '';
+  } else if (S.target && S.cur && S.cur.meta) {
+    SUB.mini = true;
+    name = '';
+    const dd = Math.round(distM(S.cur.meta, S.target) / 10) * 10;
+    line = `⌖ ${S.target.lm ? S.target.lm.name : `第 ${S.targetNo} 點`} 剩 ${dd} m`;
+  } else { SUB.last = ''; return; }
   const key = name + '|' + line;
   if (key === SUB.last) return;
   SUB.last = key;
@@ -1907,6 +1918,12 @@ function subVrUpdate() {
   g.fillStyle = '#e8c66a';
   g.font = '600 34px -apple-system, system-ui, sans-serif';
   g.textAlign = 'center';
+  if (SUB.mini) {           // 狀態列:一行置中就結束
+    g.font = '600 52px -apple-system, system-ui, sans-serif';
+    g.fillText(line, W / 2, H / 2 + 18);
+    SUB.fresh = true;
+    return;
+  }
   g.fillText(name, W / 2, 52);
   // 內文自動換行,最多三行
   g.fillStyle = '#fff';
@@ -1923,7 +1940,7 @@ function subVrUpdate() {
   SUB.fresh = true;
 }
 function subVrDraw(eyeSign, projMat) {
-  if (!S.speaking || !SUB.tex) return;
+  if (!SUB.last || !SUB.tex) return;   // 有內容就畫(播報字幕或目標倒數)
   if (!MMVR.prog) mmvrInit();
   gl.activeTexture(gl.TEXTURE3);
   gl.bindTexture(gl.TEXTURE_2D, SUB.tex);
@@ -1935,8 +1952,8 @@ function subVrDraw(eyeSign, projMat) {
   gl.uniform1i(MMVR.uTex, 3);
   gl.uniformMatrix4fv(MMVR.uP, false, projMat || FLAT_P);
   gl.uniform1f(MMVR.uEyeOff, eyeSign * 0.0315);
-  gl.uniform2f(MMVR.uPos, 0.14, -0.50);
-  gl.uniform2f(MMVR.uSize, 1.15, 0.265);
+  if (SUB.mini) { gl.uniform2f(MMVR.uPos, 0.14, -0.55); gl.uniform2f(MMVR.uSize, 0.62, 0.143); }
+  else { gl.uniform2f(MMVR.uPos, 0.14, -0.50); gl.uniform2f(MMVR.uSize, 1.15, 0.265); }
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   gl.useProgram(prog);
   gl.bindBuffer(gl.ARRAY_BUFFER, mainBuf);
