@@ -215,6 +215,9 @@ const S = {
   // 只有明確帶 role=follow 才是從屬。帶 panel 但沒帶 role 的仍是主控 ——
   // 先前寫成「有 panel 就是 follow」，結果中間那個視窗也變從屬，三個都在等別人。
   role: Q0.get('role') === 'follow' ? 'follow' : 'master',
+  // net=1:同步改走伺服器(SSE)。三台「電腦」各顯示一片時用 ——
+  // BroadcastChannel 只通同一台電腦的同一個瀏覽器。
+  net: Q0.get('net') === '1',
   panelIdx: Q0.has('panel') ? +Q0.get('panel') : null,
   fit: true,
   bottomDeg: 26,                        // 畫面下緣離水平線幾度
@@ -1059,16 +1062,24 @@ async function runLoop() {
 // 單一視窗（沒帶 panel）也當 master —— 開了側翼視窗才會有人收，沒開就沒成本
 const CH = new BroadcastChannel('pano-runner');
 
+let netAt = 0, netBusy = false;
 function bcast() {
   if (S.role !== 'master' || !CH) return;
-  CH.postMessage({
+  const msg = {
     heading: S.heading, pitch: S.pitch, tMove: S.tMove, mix: S.mix, stepD: S.stepD,
     travelDir: S.travelDir, kmh: S.kmh, moved: S.moved, steps: S.steps,
     note: S.note, running: S.running, zoomPer: S.zoomPer, sceneR: S.sceneR,
     cur: S.cur && S.cur.meta ? S.cur.meta.pano : null,
     nxt: S.nxt && S.nxt.meta ? S.nxt.meta.pano : null,
     pre: queue.length ? queue[0].link.id : null,
-  });
+  };
+  CH.postMessage(msg);
+  // 跨電腦:丟給伺服器轉發。30Hz 就夠順,上一發還在路上就跳過這發
+  if (S.net && Date.now() - netAt > 33 && !netBusy) {
+    netAt = Date.now(); netBusy = true;
+    fetch('/api/sync', { method: 'POST', body: JSON.stringify(msg) })
+      .catch(() => {}).finally(() => netBusy = false);
+  }
 }
 
 // 從屬端：照主控說的載入全景、套用狀態、畫出來
@@ -1093,24 +1104,27 @@ async function followPano(id, head) {
   return P;
 }
 
-if (S.role === 'follow' && CH) {
-  let busy = false;
-  CH.onmessage = async e => {
-    const m = e.data;
-    S.heading = m.heading; S.pitch = m.pitch; S.tMove = m.tMove; S.mix = m.mix;
-    S.stepD = m.stepD; S.travelDir = m.travelDir; S.kmh = m.kmh;
-    S.moved = m.moved; S.steps = m.steps; S.note = m.note; S.running = m.running;
-    S.zoomPer = m.zoomPer; S.sceneR = m.sceneR;
-    if (!busy) {
-      busy = true;
-      try {
-        if (m.pre) followPano(m.pre, m.travelDir);          // 先抓起來，不等它
-        if (m.cur && (!S.cur || S.cur.meta.pano !== m.cur)) S.cur = await followPano(m.cur, m.travelDir);
-        S.nxt = m.nxt ? (followCache.get(m.nxt) || await followPano(m.nxt, m.travelDir)) : null;
-      } finally { busy = false; }
-    }
-    draw();
-  };
+let followBusy = false;
+async function applySync(m) {
+  S.heading = m.heading; S.pitch = m.pitch; S.tMove = m.tMove; S.mix = m.mix;
+  S.stepD = m.stepD; S.travelDir = m.travelDir; S.kmh = m.kmh;
+  S.moved = m.moved; S.steps = m.steps; S.note = m.note; S.running = m.running;
+  S.zoomPer = m.zoomPer; S.sceneR = m.sceneR;
+  if (!followBusy) {
+    followBusy = true;
+    try {
+      if (m.pre) followPano(m.pre, m.travelDir);          // 先抓起來，不等它
+      if (m.cur && (!S.cur || S.cur.meta.pano !== m.cur)) S.cur = await followPano(m.cur, m.travelDir);
+      S.nxt = m.nxt ? (followCache.get(m.nxt) || await followPano(m.nxt, m.travelDir)) : null;
+    } finally { followBusy = false; }
+  }
+  draw();
+}
+if (S.role === 'follow' && CH) CH.onmessage = e => applySync(e.data);
+if (S.role === 'follow' && S.net) {
+  // 跨電腦從屬:掛在伺服器的 SSE 上。斷線 EventSource 會自己重連。
+  const es = new EventSource('/api/sync');
+  es.onmessage = e => { try { applySync(JSON.parse(e.data)); } catch {} };
 }
 
 // 開側翼視窗。瀏覽器一次操作只允許開一個彈出視窗（實測第二個會被擋），

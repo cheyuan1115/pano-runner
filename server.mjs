@@ -50,6 +50,11 @@ const geoMem = new Map();          // 反向地理編碼快取(同一格不重�
 // 不切格子的話每走十公尺就是一次全新查詢。
 const cellKey = (lat, lng) => `${Math.round(lat * 90)}_${Math.round(lng * 90)}`;
 const xlMem = new Map();   // 地名翻譯快取:星巴克→Starbucks
+// 跨電腦三螢幕:主控 POST 最新狀態,從屬掛在 SSE 上收。
+// 同一台電腦的多視窗仍走 BroadcastChannel(零延遲);這條是給
+// 「三台電腦各顯示一片」用的,區網延遲個位數毫秒。
+const syncClients = new Set();
+let syncLast = null;
 
 // Gemini 免費額度是「每個模型各自每天 20 次」(實測 429:
 // GenerateRequestsPerDayPerProjectPerModel-FreeTier, quota=20)。
@@ -246,6 +251,22 @@ const handler = async (req, res) => {
         }
         return json(res, { items });
       } catch (e) { return json(res, { items: [], error: String(e.message || e) }); }
+    }
+    if (u.pathname === '/api/sync' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 20000) break; }
+      syncLast = body;
+      for (const c of syncClients) { try { c.write(`data: ${body}\n\n`); } catch {} }
+      return json(res, { ok: 1, n: syncClients.size });
+    }
+    if (u.pathname === '/api/sync') {
+      res.writeHead(200, { 'content-type': 'text/event-stream',
+        'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+      res.write('\n');
+      if (syncLast) res.write(`data: ${syncLast}\n\n`);
+      syncClients.add(res);
+      req.on('close', () => syncClients.delete(res));
+      return;
     }
     if (u.pathname === '/api/nearby') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
