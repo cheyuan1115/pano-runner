@@ -1076,11 +1076,13 @@ function bcast() {
     turn: S.stepTurn || 0,
   };
   CH.postMessage(msg);
-  // 跨電腦:丟給伺服器轉發,30Hz、上一發沒回來就跳過。主控永遠推 ——
-  // 伺服器就跑在主機上,localhost 的小 POST 沒有成本,好處是側機
-  // 開 /left /right 就能接上,主機不用帶任何參數。
-  // msg.q 夾帶本頁網址參數,伺服器拿它替側機組網址。
-  if (Date.now() - netAt > 33 && !netBusy) {
+  // 跨電腦:丟給伺服器轉發。跟本機 BroadcastChannel 一樣「每畫一幀就送」——
+  // 之前節流到 30Hz,側屏只好用追趕/凍結/硬切去掩蓋階梯感,那堆補償
+  // 自己變成閃動來源(本機模式從來不閃,就是因為全速+直接套用)。
+  // netBusy 是自然限速:上一發沒回來就跳過,LAN 上實測就是畫面速率。
+  // 主控永遠推:伺服器就在主機上,localhost 小 POST 沒成本,
+  // 側機開 /left /right 就能接上。msg.q 夾帶網址參數給側機組網址用。
+  if (!netBusy) {
     netAt = Date.now(); netBusy = true;
     msg.q = location.search.slice(1);
     fetch('/api/sync', { method: 'POST', body: JSON.stringify(msg) })
@@ -1138,26 +1140,14 @@ async function followPano(id, head) {
 
 let followBusy = false;
 let followWant = null;   // 主機「最新」的全景 id;載完發現已被超車就不要上台
+let followWantNxt = null;
+let followSeq = 0;       // 訊息序號:慢載入的接續醒來,只有仍是最新才准套值
 async function applySync(m) {
-  followWant = m.cur;
-  const pT = S.tMove, pM = S.mix;   // 換景空檔要凍結用,見下
+  followWant = m.cur; followWantNxt = m.nxt;
+  const mySeq = ++followSeq;
+  // 跟本機三視窗一樣:直接套用、立刻畫。之前為 30Hz 節流加的
+  // 追趕/凍結/硬切補償全部拆掉 —— 本機模式從不閃,照抄它就對了。
   S.heading = m.heading; S.pitch = m.pitch; S.tMove = m.tMove; S.mix = m.mix;
-  // 側片完全不溶解,永遠硬切。連拍抓到證據:側面視角視差太大,
-  // 任何混合幀都是雙重曝光鬼影(書報亭出現兩次),下一幀又乾淨 ——
-  // 那就是使用者看到的「閃」。壓短溶解只是讓鬼影變短,要就是不要有。
-  // 正前方(中片/主機)兩顆幾乎對齊,溶解照舊是順的。
-  // 幾何上兩顆全景在切點解到同一個世界點,硬切本來就接近無縫。
-  if (S.panelIdx !== null && S.panelIdx !== 1) S.mix = m.mix > 0.5 ? 1 : 0;
-  // 這段一定要放在溶解抑制「之後」,不然定住的 mix 會被蓋回去(踩過)。
-  // 主機已經換到新全景、這邊還沒載好的空檔(轉彎跳點最常見):
-  // 新一步的位移/溶解套在「舊」全景上是錯的幾何,畫面會錯位閃一下,
-  // 載入快就看不到,慢半拍就閃 —— 所以「不是每次」(實際反饋)。
-  // 這段空檔把位移歸零定住舊畫面,新全景到了再繼續動。
-  if (m.cur && S.cur && S.cur.meta && S.cur.meta.pano !== m.cur) {
-    // 凍結在「上一刻」的位移,不能歸零 —— 歸零等於在舊全景上
-    // 瞬間倒退一整步,那一下就是殘餘的閃(像素偵測抓到 d1=53)。
-    S.tMove = pT; S.mix = pM;
-  }
   S.stepD = m.stepD; S.travelDir = m.travelDir; S.kmh = m.kmh;
   S.moved = m.moved; S.steps = m.steps; S.note = m.note; S.running = m.running;
   S.zoomPer = m.zoomPer; S.sceneR = m.sceneR;
@@ -1167,22 +1157,17 @@ async function applySync(m) {
       if (m.pre) followPano(m.pre, m.travelDir);          // 先抓起來，不等它
       if (m.cur && (!S.cur || S.cur.meta.pano !== m.cur)) {
         const P = await followPano(m.cur, m.travelDir);
-        // 載入的這一兩秒主機可能又走了(轉彎時全景換得快)。
-        // 把過時的全景端上來會閃一下再跳到正確的 —— 已被超車就丟掉,
-        // 下一則訊息會載最新的(busy 已釋放)。
+        // 載入的一兩秒主機可能又走了 —— 被超車的全景不上台,
+        // 過時的位移也不套(連拍抓過:醒來把舊 tMove snap 回去閃一幀)
         if (P && followWant === m.cur) S.cur = P;
-        // 新全景上台的同一則訊息裡,位移還凍在舊全景的值(上面的凍結
-        // 是在載入完成前判斷的)—— 不重設的話新全景會先畫在一整步之後
-        // 再跳回來,反向又是一閃。上台了就套回這則訊息的真值。
-        if (S.cur && S.cur.meta && S.cur.meta.pano === m.cur) {
-          S.tMove = m.tMove;
-          S.mix = (S.panelIdx !== null && S.panelIdx !== 1)
-                ? (m.mix > 0.5 ? 1 : 0) : m.mix;
+        if (mySeq === followSeq && S.cur && S.cur.meta && S.cur.meta.pano === m.cur) {
+          S.tMove = m.tMove; S.mix = m.mix;
         }
       }
-      // nxt 也一律走 followPano(裡面會等載完)—— 直接拿快取一樣
-      // 可能拿到半成品,溶解時疊上去就是黑閃
-      S.nxt = m.nxt ? await followPano(m.nxt, m.travelDir) : null;
+      // nxt 也走 followPano(裡面等載完 —— 半成品上台就是黑幀);
+      // 慢載入醒來發現 nxt 已換人就不要蓋
+      const N = m.nxt ? await followPano(m.nxt, m.travelDir) : null;
+      if (followWantNxt === m.nxt) S.nxt = N;
     } finally { followBusy = false; }
   }
   draw();
