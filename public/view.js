@@ -1190,7 +1190,10 @@ if (S.role === 'follow' && S.net) {
   // 照它的軸內插就是原汁原味的等速。off = 兩地時鐘差(取見過的最小
   // 單程延遲,每則訊息容許 +2ms 回漂,防止時鐘慢漂移卡死)。
   const NB = { buf: [], delay: 150, off: null };
-  const kick = id => { if (id) followPano(id, 0).catch(() => {}); };
+  // 方向一定要傳行進方向 —— 細節磚的視窗繞著它抓,傳 0(正北)的話
+  // 路朝別的方向跑時,側片看的區域落在細節窗外,只能用粗糙底圖畫
+  //(實際反饋:側機解析度差一點,就是這個)
+  const kick = (id, dir) => { if (id) followPano(id, dir).catch(() => {}); };
   const es = new EventSource('/api/sync');
   es.onmessage = e => {
     try {
@@ -1202,7 +1205,7 @@ if (S.role === 'follow' && S.net) {
       }
       NB.buf.push({ at, m });
       if (NB.buf.length > 240) NB.buf.shift();
-      kick(m.pre); kick(m.cur); kick(m.nxt);   // 一到就開載,不等上台
+      kick(m.pre, m.travelDir); kick(m.cur, m.travelDir); kick(m.nxt, m.travelDir);
     } catch {}
   };
   (function play() {
