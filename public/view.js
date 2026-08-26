@@ -1074,6 +1074,7 @@ function bcast() {
     nxt: S.nxt && S.nxt.meta ? S.nxt.meta.pano : null,
     pre: queue.length ? queue[0].link.id : null,
     turn: S.stepTurn || 0,
+    ts: performance.now(),   // 主機時鐘戳:側機照這個軸內插,不受網路抖動影響
   };
   CH.postMessage(msg);
   // 跨電腦:丟給伺服器轉發。跟本機 BroadcastChannel 一樣「每畫一幀就送」——
@@ -1183,20 +1184,30 @@ if (S.role === 'follow' && S.net) {
   // 才發生,全景早就(pre/cur/nxt 一到就開載)在快取裡了。
   // 這跟先前失敗的「追趕」本質不同:追趕在猜未來,插值在重播
   // 確定的過去,沒有猜錯的空間。
-  const NB = { buf: [], delay: 150 };
+  // 時間軸用「主機的時鐘戳」而不是到達時間 —— Wi-Fi 會把訊息間距
+  // 擠壓拉伸,照到達時間內插等於把抖動重播出來(微幅忽快忽慢,
+  // 實際反饋:比較好了但還是有點一格一格)。主機節拍是完美 60Hz,
+  // 照它的軸內插就是原汁原味的等速。off = 兩地時鐘差(取見過的最小
+  // 單程延遲,每則訊息容許 +2ms 回漂,防止時鐘慢漂移卡死)。
+  const NB = { buf: [], delay: 150, off: null };
   const kick = id => { if (id) followPano(id, 0).catch(() => {}); };
   const es = new EventSource('/api/sync');
   es.onmessage = e => {
     try {
       const m = JSON.parse(e.data);
-      NB.buf.push({ at: performance.now(), m });
+      const at = m.ts != null ? m.ts : performance.now();   // 舊主機沒戳就退回到達時間
+      if (m.ts != null) {
+        const off = performance.now() - m.ts;
+        NB.off = NB.off == null ? off : Math.min(NB.off + 2, off);
+      }
+      NB.buf.push({ at, m });
       if (NB.buf.length > 240) NB.buf.shift();
       kick(m.pre); kick(m.cur); kick(m.nxt);   // 一到就開載,不等上台
     } catch {}
   };
   (function play() {
     requestAnimationFrame(play);
-    const T = performance.now() - NB.delay;
+    const T = performance.now() - (NB.off || 0) - NB.delay;   // 換算到主機時鐘軸
     const B = NB.buf;
     if (!B.length) return;
     let i = B.length - 1;
