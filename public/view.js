@@ -1090,11 +1090,16 @@ function bcast() {
           // 三機模式要分片:Panini 不分片,主機也得切回直線透視的中央片,
           // 三台拼起來才是 前/左/右(實際反饋:畫面沒分前左右)
           if (S.proj === 'pan') { S.prevProj = 'pan'; S.proj = ''; S.panels = 3; }
+          // 每片視野要重設成 70°:主機網址常帶 panels=1,啟動時 hFovPer
+          // 被換算成 210°(單片攤 210°用),照抄到三片模式的中央片
+          // 等於把 210° 塞進一片直線透視,整個畫面嚴重拉伸(實際反饋)
+          S.prevHFov = S.hFovPer; S.hFovPer = 70;
           S.note = '🖥 側屏已連線,本機改畫中間片';
           if (!S.running) reloadSoon();
         } else if (j.n === 0 && S.autoPanel) {
           S.panelIdx = null; S.autoPanel = false;
           if (S.prevProj) { S.proj = S.prevProj; S.prevProj = null; }
+          if (S.prevHFov) { S.hFovPer = S.prevHFov; S.prevHFov = null; }
           if (!S.running) reloadSoon();
         }
       })
