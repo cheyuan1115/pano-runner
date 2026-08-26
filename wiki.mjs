@@ -17,7 +17,9 @@
 
 // UA 帶聯絡方式是 Wikidata 的使用政策 —— 匿名重度使用會被封好幾小時
 // (2026-08-25 整夜實測:柏林愛丁堡整批 0 結果,早上自動解封)。
-const UA = 'pano-runner/1.0 (personal virtual-running; contact: cheyuan1115@gmail.com)';
+// Wikimedia 要求 UA 帶聯絡方式(匿名重用量會被封,親身踩過)。
+// 開源版:請在環境變數填你自己的 email。
+const UA = `pano-runner/1.0 (personal virtual-running; contact: ${process.env.PANO_CONTACT || 'set-PANO_CONTACT-env@example.com'})`;
 const nap = ms => new Promise(r => setTimeout(r, ms));
 // 被限流之後要退多久。批次抓的時候可以調大（tools/warm-wiki.mjs 會設）。
 export const tune = { retryMs: 3000, gapMs: 300 };

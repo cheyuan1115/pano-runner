@@ -49,6 +49,12 @@ const geoMem = new Map();          // 反向地理編碼快取(同一格不重�
 // 所以一定要快取。用約 1.1 公里見方的格子當鍵 —— 跑步時位置一直在動，
 // 不切格子的話每走十公尺就是一次全新查詢。
 const cellKey = (lat, lng) => `${Math.round(lat * 90)}_${Math.round(lng * 90)}`;
+import { networkInterfaces } from 'node:os';
+function lanIP() {
+  for (const l of Object.values(networkInterfaces()))
+    for (const i of l || []) if (i.family === 'IPv4' && !i.internal) return i.address;
+  return 'localhost';
+}
 const xlMem = new Map();   // 地名翻譯快取:星巴克→Starbucks
 // 跨電腦三螢幕:主控 POST 最新狀態,從屬掛在 SSE 上收。
 // 同一台電腦的多視窗仍走 BroadcastChannel(零延遲);這條是給
@@ -632,5 +638,5 @@ try {
     readFile(join(fileURLToPath(new URL('.', import.meta.url)), 'cert', 'cert.pem')),
   ]);
   createTls({ key, cert }, handler).listen(PORT + 1, () =>
-    console.log(`pano-runner  https://192.168.0.117:${PORT + 1}  （VR 用）`));
+    console.log(`pano-runner  https://${lanIP()}:${PORT + 1}  （VR 用）`));
 } catch { console.log('沒有憑證，HTTPS 未啟動（VR 需要它）'); }
