@@ -1074,10 +1074,24 @@ function bcast() {
     pre: queue.length ? queue[0].link.id : null,
   };
   CH.postMessage(msg);
-  // 跨電腦:丟給伺服器轉發。30Hz 就夠順,上一發還在路上就跳過這發
-  if (S.net && Date.now() - netAt > 33 && !netBusy) {
+  // 跨電腦:丟給伺服器轉發,30Hz、上一發沒回來就跳過。主控永遠推 ——
+  // 伺服器就跑在主機上,localhost 的小 POST 沒有成本,好處是側機
+  // 開 /left /right 就能接上,主機不用帶任何參數。
+  // msg.q 夾帶本頁網址參數,伺服器拿它替側機組網址。
+  if (Date.now() - netAt > 33 && !netBusy) {
     netAt = Date.now(); netBusy = true;
+    msg.q = location.search.slice(1);
     fetch('/api/sync', { method: 'POST', body: JSON.stringify(msg) })
+      .then(r => r.json())
+      .then(j => {
+        // 有側屏連著:本機自動只畫中間片;都走了就恢復畫全部
+        if (j.n > 0 && S.panelIdx === null) {
+          S.panelIdx = 1; S.autoPanel = true;
+          S.note = '🖥 側屏已連線,本機改畫中間片';
+        } else if (j.n === 0 && S.autoPanel) {
+          S.panelIdx = null; S.autoPanel = false;
+        }
+      })
       .catch(() => {}).finally(() => netBusy = false);
   }
 }

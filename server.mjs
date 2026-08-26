@@ -252,6 +252,26 @@ const handler = async (req, res) => {
         return json(res, { items });
       } catch (e) { return json(res, { items: [], error: String(e.message || e) }); }
     }
+    // 側機零設定入口:側機只要開 /left 或 /right(手機也一樣),
+    // 伺服器拿主控最近一次同步裡夾帶的網址參數,自動組出從屬網址轉過去。
+    // 使用者不用抄任何參數(實際反饋:「你寫'參數'我實在不會用」)。
+    if (u.pathname === '/left' || u.pathname === '/right' || u.pathname === '/mid') {
+      let q = null;
+      try { q = JSON.parse(syncLast).q; } catch {}
+      if (q == null) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        return res.end('<meta name=viewport content="width=device-width">' +
+          '<body style="font:20px/1.8 sans-serif;background:#111;color:#eee;padding:40px">' +
+          '主機還沒開始跑。<br>先在主機的啟動器按「開始跑」,再重新整理這頁。' +
+          '<script>setTimeout(()=>location.reload(),3000)</script>');
+      }
+      const sp = new URLSearchParams(q);
+      for (const k of ['panel', 'role', 'net', 'run', 'mic', 'voice']) sp.delete(k);
+      sp.set('panel', u.pathname === '/left' ? '0' : u.pathname === '/right' ? '2' : '1');
+      sp.set('role', 'follow'); sp.set('net', '1');
+      res.writeHead(302, { location: '/run.html?' + sp });
+      return res.end();
+    }
     if (u.pathname === '/api/sync' && req.method === 'POST') {
       let body = '';
       for await (const c of req) { body += c; if (body.length > 20000) break; }
