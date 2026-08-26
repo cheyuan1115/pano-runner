@@ -10,6 +10,18 @@ A self-hosted **virtual treadmill runner**: it renders Street View panoramas wit
 
 *Osaka Mint sakura tunnel, April 2012 historical imagery — one of the built-in "time machine" trails.*
 
+## One engine, three ways to run
+
+**1. One (ultra)wide screen** — the seamless 200°+ Panini projection in the GIF above: no seams, straight verticals, works on any monitor.
+
+**2. Three screens around your treadmill** — two spare machines open `/left` and `/right`, and you get a synchronized 210° wraparound:
+
+[![210° three-screen wraparound](docs/triple-thumb.jpg)](docs/triple-screen.mp4)
+
+*▶ Click to watch the three panels running in sync (15s).*
+
+**3. A VR headset** — full WebXR stereo with in-headset minimap, subtitles and the AI tour guide:
+
 [![In-headset VR capture with AI guide audio](docs/vr-thumb.jpg)](docs/vr-capture.mp4)
 
 *▶ Click for the in-headset Quest 1 capture (56s, with the English AI tour-guide audio) — Ueno Park in full bloom.*
@@ -29,9 +41,6 @@ This is a personal research project. See [Data sources & fair use](#data-sources
 - **AI live guide** — no landmark data? One command sends the current view + GPS facts to Gemini, which improvises a grounded, hallucination-resistant intro — while the view *rewinds* along your path so the narration starts exactly where you asked.
 - **WebXR** — full stereo rendering on Quest-class headsets, with in-headset minimap, subtitles, thumbstick steering and stick-forward locomotion. Battle-tested on a Quest 1.
 - **Multi-screen** — one master + side panels over BroadcastChannel (same machine) or SSE (any machine on your LAN: open `/left` and `/right`, zero config). Interpolation buffer makes Wi-Fi followers as smooth as local ones.
-
-  ![210° three-screen wraparound](docs/triple-screen.jpg)
-  *Three machines, three 70° panels, one synchronized 210° wraparound around your treadmill.*
 - **Time machine** — lock the month (cherry-blossom April, autumn November, snow February) and the runner auto-switches to historical imagery where available; curated "rails" replay one continuous era end-to-end.
 - **GPX export** of every run.
 - **English & Traditional Chinese UI** — auto-detected from your browser (`?lang=en` to force).
