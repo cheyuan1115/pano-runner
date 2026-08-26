@@ -10,6 +10,10 @@ A self-hosted **virtual treadmill runner**: it renders Street View panoramas wit
 
 *Osaka Mint sakura tunnel, April 2012 historical imagery — one of the built-in "time machine" trails.*
 
+[![In-headset VR capture with AI guide audio](docs/vr-thumb.jpg)](docs/vr-capture.mp4)
+
+*▶ Click for the in-headset Quest 1 capture (56s, with the English AI tour-guide audio) — Ueno Park in full bloom.*
+
 ## Why it exists
 
 Consumer Street View caps you at a ~90° window inside someone else's UI. Fetching the raw panorama tiles and projecting them yourself removes every one of those walls: any field of view, seamless ultra-wide projection, multi-screen 210° setups, WebXR stereo, custom transitions between panoramas — all from the same data.
