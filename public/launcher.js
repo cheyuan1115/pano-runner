@@ -539,7 +539,8 @@ drawMap(); say();
     '7–8 月（盛夏）': 'Jul–Aug (summer)',
     '1 月': 'Jan', '2 月': 'Feb', '3 月': 'Mar', '4 月': 'Apr', '5 月': 'May', '6 月': 'Jun',
     '7 月': 'Jul', '8 月': 'Aug', '9 月': 'Sep', '10 月': 'Oct', '11 月': 'Nov', '12 月': 'Dec',
-    '語音操控（左轉／右轉／回頭／導覽／結束跑步）': 'Voice control (zh-TW commands)',
+    '語音操控（左轉／右轉／回頭／導覽／結束跑步）':
+      'Voice control (left / right / turn around / guide / describe / run to …)',
     '畫面': 'View', '解析度': 'Resolution',
     '五片（接縫折角最小）': '5 panels', '三片': '3 panels', '單片': '1 panel',
     '連續超廣角（Panini，無接縫）': 'Seamless ultra-wide (Panini)',

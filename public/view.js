@@ -1371,7 +1371,8 @@ async function ttsFor(lm) {
   if (ttsMem.has(lm.id)) return ttsMem.get(lm.id);
   const r = await fetch('/api/tts', { method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: lm.id, lines: lm.lines }),
+    body: JSON.stringify({ id: lm.id, lines: lm.lines,
+      lang: (EN_UI && String(lm.id).startsWith('ai:')) ? 'en' : 'zh' }),
     signal: AbortSignal.timeout(18000) });
   const j = await r.json();
   if (!j.audio) throw new Error(j.error || 'TTS 失敗');
@@ -1967,12 +1968,13 @@ async function aiGuide() {
       const r = await fetch('/api/aiguide', { method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lat: m.lat, lng: m.lng, heading: S.heading,
-          date: m.date || null, nearby, img, recent: AIG.recent }),
+          date: m.date || null, nearby, img, recent: AIG.recent,
+          lang: EN_UI ? 'en' : 'zh' }),
         // 60 秒:伺服器端會在多款模型間輪備援(額度 429 就換下一款),整串可能很久
         signal: AbortSignal.timeout(60000) });
       const j = await r.json();
       if (!j.text) return { j };
-      const lines = (j.text.match(/[^。！？!?]+[。！？!?]?/g) || [j.text])
+      const lines = (j.text.match(EN_UI ? /[^。！？.!?]+[。！？.!?]?/g : /[^。！？!?]+[。！？!?]?/g) || [j.text])
         .map(t => t.trim()).filter(t => t.length > 1);
       const lm = { id: 'ai:' + Date.now(), name: T('AI 導覽', 'AI Guide'), lat: m.lat, lng: m.lng,
                    script: j.text, lines, marks: [], photos: [], audio: '' };
@@ -2326,7 +2328,7 @@ function showAsk(lm) {
   S.asking = lm;
   const el = $('lm-ask');
   el.innerHTML = `<div class="t1">${T('即將經過', 'Coming up:')} ${lm.name}</div>`
-    + `<div class="t2">${T('說「導覽」就跑過去介紹', 'Say 導覽 (or press G) for a guided detour')}</div>`
+    + `<div class="t2">${T('說「導覽」就跑過去介紹', 'Say "guide" for a guided detour')}</div>`
     + `<div class="t3">${T('不用回答，繼續跑就好', 'No answer needed — just keep running')}</div>`;
   el.classList.add('on');
 }
@@ -2369,10 +2371,16 @@ async function acceptGuide() {
 // 語音「跑到某景點」:在附近 3 公里找名字,找到就沿路跑過去,
 // 到了(90 公尺內)走既有的繞路抵達邏輯,自動播那個景點的導覽。
 async function gotoLm(text) {
-  const x = (text || '').replace(/[\s。，、！？.,!?]/g, '')
-    .replace(/^(小跑|跑步|嘿小跑)/, '').replace(/(吧|喔|囉|了|啦|一下)$/, '');
-  const mm = x.match(/^(跑到|跑去|前往)(.+)$/);
-  const q = mm ? mm[2] : x;
+  let q;
+  const xe = (text || '').toLowerCase().replace(/[。，、！？.,!?]/g, '').replace(/\s+/g, ' ').trim();
+  const me = xe.match(/^(run to|go to|take me to) (.+)$/);   // 英文:run to central park
+  if (me) q = me[2];
+  else {
+    const x = (text || '').replace(/[\s。，、！？.,!?]/g, '')
+      .replace(/^(小跑|跑步|嘿小跑)/, '').replace(/(吧|喔|囉|了|啦|一下)$/, '');
+    const mm = x.match(/^(跑到|跑去|前往)(.+)$/);
+    q = mm ? mm[2] : x;
+  }
   if (!q || q.length < 2 || !S.cur?.meta) return;
   const m = S.cur.meta;
   S.note = `⌖ 找「${q}」…`; draw();

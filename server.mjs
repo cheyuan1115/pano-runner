@@ -87,11 +87,15 @@ async function genAI(models, body, timeoutMs = 20000, ok = null) {
   }
   return null;
 }
-// 導覽稿的驗收:繁中為主、不得含 (127) 這種編號雜訊、不得大段英文
-const guideOk = t => {
+// 導覽稿的驗收(語言感知,中文稿驗中文、英文稿驗英文 —— 一開始只驗
+// 中文占比,英文模式整條備援鏈全被打槍,502):
+// 共同:不得含 (127) 編號雜訊、草稿字眼、markdown 條列。
+const guideOk = (t, lang) => {
+  if (/[（(]\d+[)）]/.test(t)) return false;
+  if (/Drafting|drafting|\*\*|Hard rules|guessing names/.test(t)) return false;
+  if (/(^|\n)\s*[*#-]\s/.test(t)) return false;
   const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
-  return cjk >= t.length * 0.45 && !/[（(]\d+[)）]/.test(t)
-      && !/Drafting|drafting|\*\*/.test(t);
+  return lang === 'en' ? cjk < t.length * 0.1 : cjk >= t.length * 0.45;
 };
 // 看圖的導覽用完整 flash 系(各世代額度分開);翻譯是小事,用 lite 系,
 // 不跟導覽搶額度。
@@ -505,7 +509,9 @@ const handler = async (req, res) => {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             input: { ssml },
-            voice: { languageCode: 'cmn-TW', name: 'cmn-TW-Wavenet-A' },
+            voice: q2.lang === 'en'
+              ? { languageCode: 'en-US', name: 'en-US-Wavenet-D' }
+              : { languageCode: 'cmn-TW', name: 'cmn-TW-Wavenet-A' },
             audioConfig: { audioEncoding: 'OGG_OPUS', speakingRate: 1.0 },
             enableTimePointing: ['SSML_MARK'],
           }), signal: AbortSignal.timeout(20000),
@@ -554,7 +560,19 @@ const handler = async (req, res) => {
         (q2.nearby || []).length
           ? '附近的已知景點:' + q2.nearby.map(n => `${n.name}(${Math.round(n.d)}公尺)`).join('、') : '',
       ].filter(Boolean).join('\n');
-      const prompt = `你是知識型導遊。訪客眼前是附的街景照片。
+      const prompt = q2.lang === 'en' ? `You are a knowledgeable tour guide. The attached photo is the visitor's current street view.
+Write a 80-120 word spoken introduction, concise but substantive — every sentence should carry a fact: history, origins, purpose, what an architectural feature means, how this area fits the city.
+No filler-mood sentences ("adds a touch of elegance" etc). No mentions of running or exercise, no pep talk, no questions.
+
+Verified facts:
+${facts}
+
+Hard rules:
+1. Only use proper nouns that appear in the facts above. Never name a building or shop that isn't listed.
+2. For anything you can't identify in the photo, describe what's visible (style, materials, street character) — never guess a name.
+3. When unsure, talk about the district's history and context; never invent dates or names.
+4. Don't open with "this photo" or "this image" — speak as if standing there.
+${(q2.recent || []).length ? '5. Already covered, do not repeat: ' + q2.recent.join(' / ') : ''}` : `你是知識型導遊。訪客眼前是附的街景照片。
 用繁體中文(台灣用語)寫一段 100 到 150 字的導覽,簡潔但每句都有內容。
 每一句都要帶知識點:歷史、由來、用途、建築特徵的意義、這一區的定位。
 禁止氛圍填充句:「增添幾分優雅」「感受獨特魅力」「悠閒氣息」這類
@@ -577,7 +595,7 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
           { inline_data: { mime_type: 'image/jpeg', data: q2.img } },
         ] }],
         generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
-      }, 25000, guideOk);
+      }, 25000, t => guideOk(t, q2.lang));
       if (!out) return json(res, { error: '今天的 AI 額度用完了(每模型每天 20 次,已全輪過)' }, 502);
       // 最後保險:就算通過驗收,殘餘的編號雜訊也清掉
       const clean = out.text.replace(/[（(]\d+[)）]\s*/g, '').replace(/\s{2,}/g, ' ').trim();

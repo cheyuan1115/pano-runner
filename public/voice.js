@@ -19,6 +19,10 @@
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { window.__voiceError = '這個瀏覽器沒有語音辨識'; return; }
   if (window.__voice) return;
+  // 英文模式:辨識引擎切 en-US、改用英文指令詞表(跟介面同一套判斷)
+  const Q9 = new URLSearchParams(location.search);
+  const EN_V = Q9.get('lang') === 'en'
+    || (!Q9.get('lang') && !/^zh/.test(navigator.language || ''));
 
   const WORDS = {
     // 後面那幾個是辨識常見的同音誤判 —— zh-TW 對單音節特別不準，
@@ -46,10 +50,27 @@
   };
   // 指令最長就這麼長。超過表示那是一般說話（或電視、旁人講話），
   // 不但不可能命中，還會把辨識段落一直佔住 —— 直接判定不是指令、當場重來。
-  const MAX_LEN = 14;
+  const MAX_LEN = EN_V ? 30 : 14;   // 英文片語比較長(turn around 就 11 字)
+  // 英文指令詞表:比對前先小寫、去標點、空白壓成單一空格
+  const WORDS_EN = {
+    left:  ['left', 'turn left', 'go left'],
+    right: ['right', 'turn right', 'go right'],
+    back:  ['turn around', 'u turn', 'u-turn', 'go back', 'turn back'],
+    stop:  ['stop running', 'finish run', 'end run', 'im done', "i'm done"],
+    guide: ['guide', 'tour', 'guide me', 'take the tour'],
+    aiguide: ['describe', 'describe this', 'what is this', 'whats this',
+              "what's this", 'tell me about this', 'introduce'],
+  };
   // 環境吵的時候可以加啟動詞：「小跑右轉」。安靜時直接說「右轉」就好。
   const WAKE = /^(小跑|跑步|嘿小跑)/;
   const parse = t => {
+    if (EN_V) {
+      const x2 = (t || '').toLowerCase().replace(/[。，、！？.,!?]/g, '')
+        .replace(/\s+/g, ' ').trim();
+      for (const [cmd, list] of Object.entries(WORDS_EN)) if (list.includes(x2)) return cmd;
+      if (/^(run to|go to|take me to) .{2,40}$/.test(x2)) return 'goto';
+      return null;
+    }
     let x = (t || '').replace(/[\s。，、！？.,!?]/g, '');
     x = x.replace(WAKE, '');
     x = x.replace(/(吧|喔|囉|了|一下|啦)$/, '');
@@ -104,7 +125,7 @@
 
   const build = myGen => {
     const r = new SR();
-    r.lang = 'zh-TW';
+    r.lang = EN_V ? 'en-US' : 'zh-TW';
     // 一句一個段落。continuous = true 的話 Chrome 會把一長串話累積成同一段，
     // 永遠不下 final；而比對要求「整句等於指令」，那一段就永遠不會命中也不會結束。
     // 症狀正是「聽了一堆沒用的，一串話就卡住不再聽」。
