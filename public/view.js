@@ -651,7 +651,8 @@ function drawInner() {
          + `${Math.round(hHalfDeg() * 2 * S.panels)}°${S.fit ? '　自動比例' : ''}\n`)
     + (S.panelIdx !== null ? `🖥 ${['左', '中', '右'][S.panelIdx]}片（${S.role === 'master' ? '主控' : '從屬'}）   ` : '')
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
-    + (xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   `
+    + (xr.session && STK.seen ? `🕹 ${STK.kmh.toFixed(1)} km/h   `
+       : xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   `
        : xr.session && HB.at ? `👣 ${HB.kmh.toFixed(1)} km/h   ` : '')
     + (S.photoFail ? `🖼 照片載不到 ×${S.photoFail}   ` : '')
     + (S.mic ? `🎙 ${window.__cad?.spm ? Math.round(window.__cad.spm) + ' spm' : '聽…'}   ` : '')
@@ -896,19 +897,22 @@ async function stepOnce() {
 
   // 手擺速只在「最近有讀到控制器」時生效 —— 放下控制器 2.5 秒後
   // 回到啟動器設定的固定速度（不然速度會凍在放下前的值）
-  const paceSrc = () => (xr.session && VH.seen && Date.now() - VH.at < 2500
+  const paceSrc = () => (xr.session && STK.seen) ? 'stick'
+                      : (xr.session && VH.seen && Date.now() - VH.at < 2500
                           && Date.now() - ST.at > 10000) ? 'hand'
                       : (xr.session && HB.at && Date.now() - HB.at < 2500) ? 'head'
                       : (S.mic ? 'mic' : null);
   if (paceSrc()) {
     const read = () => { const p = paceSrc();
-      return p === 'hand' ? Math.min(S.kmhCap || 12, VH.kmh)
+      return p === 'stick' ? STK.kmh
+           : p === 'hand' ? Math.min(S.kmhCap || 12, VH.kmh)
            : p === 'head' ? Math.min(S.kmhCap || 12, HB.kmh)
            : micSpeed(); };
     S.kmh = read();
     // 停住的時候不要一直丟出轉場，等訊號回來
     while (S.running && S.kmh < 1.5 && paceSrc()) {
-      S.note = paceSrc() === 'hand' ? '⏸ 手停了，畫面停住（擺手就走）'
+      S.note = paceSrc() === 'stick' ? '⏸ 搖桿放開了（前推就走）'
+             : paceSrc() === 'hand' ? '⏸ 手停了，畫面停住（擺手就走）'
              : paceSrc() === 'head' ? '⏸ 腳步停了，畫面停住（原地踏步就走）'
              : '⏸ 沒有腳步聲，畫面停住';
       draw(); await sleep(400); S.kmh = read();
@@ -1855,9 +1859,14 @@ async function aiGuide() {
 // 手擺控速也讓位給頭部起伏 —— 握著手把撥桿時手是靜止的,
 // 手擺會誤判成「停」。
 const ST = { armed: true, at: 0, btn: false };
+// 搖桿前推=前進:推越多越快(0.3 起步、0.9 到達設定速度上限),
+// 放開=停。推過一次之後(STK.seen)搖桿就接管速度 —— 明確的操作
+// 優先於手擺/頭部起伏的猜測。前推是 y 負方向,跟「往下撥=回頭」不衝突。
+const STK = { kmh: 0, at: 0, seen: false };
 function vrStick() {
   const ses = xr.session;
   if (!ses) return;
+  let fwdMax = 0;
   for (const src of ses.inputSources) {
     const gp = src.gamepad;
     if (!gp || !gp.axes) continue;
@@ -1865,6 +1874,7 @@ function vrStick() {
     const x = gp.axes.length > 2 ? gp.axes[2] : (gp.axes[0] || 0);
     const y = gp.axes.length > 3 ? gp.axes[3] : (gp.axes[1] || 0);
     if (Math.abs(x) > 0.2 || Math.abs(y) > 0.2) ST.at = Date.now();
+    if (-y > fwdMax) fwdMax = -y;      // 兩支手把取推得比較多的那支
     if (ST.armed) {
       if (x > 0.65) { ST.armed = false; window.__turn('right', '搖桿'); }
       else if (x < -0.65) { ST.armed = false; window.__turn('left', '搖桿'); }
@@ -1875,6 +1885,11 @@ function vrStick() {
     if (pressed && !ST.btn) { ST.btn = true; window.__turn('guide', '按鍵'); }
     else if (!pressed) ST.btn = false;
   }
+  if (fwdMax > 0.3) {
+    STK.seen = true; STK.at = Date.now();
+    const k = Math.min(1, (fwdMax - 0.3) / 0.6);
+    STK.kmh = 2 + k * ((S.kmhCap || 12) - 2);
+  } else STK.kmh = 0;
 }
 
 // ── VR 字幕面板 ──────────────────────────────────────────
