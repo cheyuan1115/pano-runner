@@ -71,7 +71,7 @@ Optional integrations (each degrades gracefully if absent):
 | Gemini AI guide | `~/.keys/geminikey` — a Gemini API key |
 | Wikimedia politeness | `PANO_CONTACT=you@example.com` env var (goes into the User-Agent, per Wikimedia policy) |
 | VR | open the printed `https://<lan-ip>:8878` URL from the headset browser (self-signed cert in `cert/`) |
-| Real treadmill speed | [QZ](https://github.com/cagnulein/qdomyos-zwift): set OSC output to `<server-ip>:9005` (port: `PANO_QZ_PORT`). Speed takes over automatically; falls back after 4s of silence |
+| Real treadmill speed | Two ways: **direct Bluetooth** — click "🏃 Connect treadmill" on the run page (Chrome, FTMS treadmills) — or [QZ](https://github.com/cagnulein/qdomyos-zwift) with OSC output set to `<server-ip>:9005` (port: `PANO_QZ_PORT`, works for VR too). Speed takes over automatically; falls back after 4s of silence |
 
 ## Architecture (600-line server, zero deps)
 

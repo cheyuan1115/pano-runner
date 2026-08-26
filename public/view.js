@@ -2014,6 +2014,54 @@ const STK = { kmh: 0, at: 0, seen: false };
 // 4 秒內有新鮮數據就是最高優先的速度來源 —— 藍牙讀出來的真實速度,
 // 比任何用猜的(麥克風/手擺/頭部)都準;斷線自動退回原本機制。
 const QZS = { kmh: null, heart: 0, at: 0 };
+// ── 跑步機直連(Web Bluetooth / FTMS)────────────────────────
+// 跑步機講的是標準 FTMS 協定,Chrome 可以直接連,不用任何中間 app
+//(QZ 那條路留給 VR:Quest 瀏覽器沒有 Web Bluetooth)。
+// 讀 Treadmill Data(0x2ACD)通知:速度必有(0.01 km/h),心率看旗標。
+// 數據直接寫進 QZS —— 跟 QZ 走同一條最高優先速度鏈與 HUD。
+async function btConnect() {
+  try {
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [{ services: ['fitness_machine'] }],
+      optionalServices: ['heart_rate'] });
+    const srv = await (await dev.gatt.connect()).getPrimaryService('fitness_machine');
+    const ch = await srv.getCharacteristic(0x2ACD);   // Treadmill Data
+    await ch.startNotifications();
+    ch.addEventListener('characteristicvaluechanged', e => {
+      const v = e.target.value;
+      const flags = v.getUint16(0, true);
+      QZS.kmh = v.getUint16(2, true) / 100;           // 瞬時速度必在最前
+      // 心率在一串可選欄位後面,照旗標逐欄跳過:
+      // bit1 平均速度+2、bit2 總距離+3、bit3 坡度+4、bit4 爬升+4、
+      // bit5 瞬時配速+1、bit6 平均配速+1、bit7 熱量+5、bit8 心率 u8
+      let o = 4;
+      const skip = [[1,2],[2,3],[3,4],[4,4],[5,1],[6,1],[7,5]];
+      for (const [bit, n] of skip) if (flags & (1 << bit)) o += n;
+      if (flags & (1 << 8) && o < v.byteLength) QZS.heart = v.getUint8(o);
+      QZS.at = Date.now();
+    });
+    const b = document.getElementById('btbtn');
+    if (b) b.style.display = 'none';
+    S.note = T('🏃 跑步機已連上,速度交給它', '🏃 Treadmill connected — it drives the pace now');
+    dev.addEventListener('gattserverdisconnected', () => {
+      QZS.at = 0;
+      if (b) b.style.display = 'block';
+      S.note = T('⚠ 跑步機斷線,退回原本的速度', '⚠ Treadmill disconnected — falling back');
+    });
+  } catch (e) {
+    if (String(e).includes('cancel')) return;         // 使用者關掉選擇框
+    S.note = '🏃 ' + String(e.message || e).slice(0, 60);
+  }
+}
+window.btConnect = btConnect;
+// 有 Web Bluetooth 的環境才顯示按鈕(Quest 瀏覽器沒有,那邊用 QZ)
+setTimeout(() => {
+  const b = document.getElementById('btbtn');
+  if (b && navigator.bluetooth) {
+    b.style.display = 'block';
+    if (EN_UI) b.textContent = '🏃 Connect treadmill';
+  }
+}, 1500);
 setInterval(async () => {
   try {
     const j = await (await fetch('/api/qz', { signal: AbortSignal.timeout(900) })).json();

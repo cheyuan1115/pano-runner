@@ -66,7 +66,7 @@ node server.mjs
 | Gemini AI 導遊 | `~/.keys/geminikey` |
 | 維基禮貌標頭 | 環境變數 `PANO_CONTACT=你的email`(Wikimedia 政策要求) |
 | VR | 頭盔瀏覽器開伺服器印出的 `https://<區網IP>:8878`(`cert/` 放自簽憑證) |
-| 真實跑步機速度 | [QZ](https://github.com/cagnulein/qdomyos-zwift):OSC 輸出設 `<伺服器IP>:9005`(埠可用 `PANO_QZ_PORT` 改)。速度自動接管,斷訊 4 秒退回 |
+| 真實跑步機速度 | 兩條路:**藍牙直連**——跑步頁點「🏃 連跑步機」(Chrome,FTMS 跑步機皆可)——或 [QZ](https://github.com/cagnulein/qdomyos-zwift) 把 OSC 輸出設 `<伺服器IP>:9005`(VR 場景用這條)。速度自動接管,斷訊 4 秒退回 |
 
 ## 資料來源與合理使用
 
