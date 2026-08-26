@@ -29,6 +29,9 @@ This is a personal research project. See [Data sources & fair use](#data-sources
 - **AI live guide** — no landmark data? One command sends the current view + GPS facts to Gemini, which improvises a grounded, hallucination-resistant intro — while the view *rewinds* along your path so the narration starts exactly where you asked.
 - **WebXR** — full stereo rendering on Quest-class headsets, with in-headset minimap, subtitles, thumbstick steering and stick-forward locomotion. Battle-tested on a Quest 1.
 - **Multi-screen** — one master + side panels over BroadcastChannel (same machine) or SSE (any machine on your LAN: open `/left` and `/right`, zero config). Interpolation buffer makes Wi-Fi followers as smooth as local ones.
+
+  ![210° three-screen wraparound](docs/triple-screen.jpg)
+  *Three machines, three 70° panels, one synchronized 210° wraparound around your treadmill.*
 - **Time machine** — lock the month (cherry-blossom April, autumn November, snow February) and the runner auto-switches to historical imagery where available; curated "rails" replay one continuous era end-to-end.
 - **GPX export** of every run.
 - **English & Traditional Chinese UI** — auto-detected from your browser (`?lang=en` to force).
