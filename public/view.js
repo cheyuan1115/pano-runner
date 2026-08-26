@@ -2758,6 +2758,9 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('mini') === '0') S.mini = false;
+  // 從屬側屏一律不顯示小地圖(除非明帶 mini=1)。不能只靠 /left 轉址
+  // 加參數 —— 側機重新整理的是轉址後的舊網址,參數就掉了(實測還是有)。
+  if (S.role === 'follow' && q.get('mini') !== '1') S.mini = false;
   if (q.get('mmvr') === '1') S.mmvrTest = true;
   if (q.get('season')) S.season = q.get('season');
   if (S.season === 'sakura') S.lockMonths = [4, 3];   // 四月優先,三月備胎
