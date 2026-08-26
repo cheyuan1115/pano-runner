@@ -272,6 +272,8 @@ const handler = async (req, res) => {
       sp.delete('proj'); sp.set('panels', '3');
       sp.set('panel', u.pathname === '/left' ? '0' : u.pathname === '/right' ? '2' : '1');
       sp.set('role', 'follow'); sp.set('net', '1');
+      // 小地圖只留主機那台(左右螢幕不要,使用者指定)
+      if (u.pathname !== '/mid') sp.set('mini', '0');
       res.writeHead(302, { location: '/run.html?' + sp });
       return res.end();
     }
