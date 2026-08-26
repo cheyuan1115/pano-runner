@@ -1119,7 +1119,7 @@ async function followPano(id, head) {
     followCache.set(id, P);
     await load(P, id, head);
     // 只留最近幾顆，免得貼圖把記憶體吃光
-    while (followCache.size > 5) {
+    while (followCache.size > 8) {
       const k = followCache.keys().next().value;
       const old = followCache.get(k);
       if (old !== S.cur && old !== S.nxt) {
@@ -1143,6 +1143,14 @@ async function applySync(m) {
     mix = Math.max(0, Math.min(1, (mix - 0.5) * 3 + 0.5));
     if ((m.turn || 0) > 25) mix = mix > 0.5 ? 1 : 0;
     S.mix = mix;
+  }
+  // 這段一定要放在溶解抑制「之後」,不然定住的 mix 會被蓋回去(踩過)。
+  // 主機已經換到新全景、這邊還沒載好的空檔(轉彎跳點最常見):
+  // 新一步的位移/溶解套在「舊」全景上是錯的幾何,畫面會錯位閃一下,
+  // 載入快就看不到,慢半拍就閃 —— 所以「不是每次」(實際反饋)。
+  // 這段空檔把位移歸零定住舊畫面,新全景到了再繼續動。
+  if (m.cur && S.cur && S.cur.meta && S.cur.meta.pano !== m.cur) {
+    S.tMove = 0; S.mix = 0;
   }
   S.stepD = m.stepD; S.travelDir = m.travelDir; S.kmh = m.kmh;
   S.moved = m.moved; S.steps = m.steps; S.note = m.note; S.running = m.running;
