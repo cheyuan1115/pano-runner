@@ -485,10 +485,11 @@ const handler = async (req, res) => {
     if (u.pathname === '/api/tts' && req.method === 'POST') {
       let body = '';
       for await (const c of req) { body += c; if (body.length > 40000) break; }
-      let lines, id;
-      try { ({ id, lines } = JSON.parse(body)); } catch { return json(res, { error: '格式' }, 400); }
+      let lines, id, lang;
+      try { ({ id, lines, lang } = JSON.parse(body)); } catch { return json(res, { error: '格式' }, 400); }
       if (!Array.isArray(lines) || !lines.length) return json(res, { error: '沒有句子' }, 400);
-      if (ttsMem.has(id)) return json(res, ttsMem.get(id));
+      const ck = id + '|' + (lang || 'zh');
+      if (ttsMem.has(ck)) return json(res, ttsMem.get(ck));
       let key;
       try { key = (await readFile(join(process.env.HOME, '.keys', 'mapskey'), 'utf8')).trim(); }
       catch { try { key = (await readFile('/tmp/.mapskey', 'utf8')).trim(); }
@@ -509,7 +510,10 @@ const handler = async (req, res) => {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             input: { ssml },
-            voice: q2.lang === 'en'
+            // 這裡的變數是 lang,不是 q2(那是 aiguide 路由的)——
+            // 寫錯成 q2.lang 時整個 TTS 噴 ReferenceError,中英文全退化到
+            // 瀏覽器合成,桌面有內建語音沒察覺,Quest 沒有就變啞巴(實測)
+            voice: lang === 'en'
               ? { languageCode: 'en-US', name: 'en-US-Wavenet-D' }
               : { languageCode: 'cmn-TW', name: 'cmn-TW-Wavenet-A' },
             audioConfig: { audioEncoding: 'OGG_OPUS', speakingRate: 1.0 },
@@ -523,7 +527,7 @@ const handler = async (req, res) => {
           return tp ? tp.timeSeconds : 0;
         });
         const out = { audio: j.audioContent, marks };
-        ttsMem.set(id, out);
+        ttsMem.set(ck, out);
         if (ttsMem.size > 40) ttsMem.delete(ttsMem.keys().next().value);
         return json(res, out);
       } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
