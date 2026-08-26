@@ -12,7 +12,11 @@ A self-hosted **virtual treadmill runner**: it renders Street View panoramas wit
 
 ## One engine, three ways to run
 
-**1. One (ultra)wide screen** — the seamless 200°+ Panini projection in the GIF above: no seams, straight verticals, works on any monitor.
+**1. One (ultra)wide screen** — seamless 200°+ Panini projection: no seams, straight verticals, works on any monitor:
+
+[![Ultra-wide single screen](docs/wide-thumb.jpg)](docs/wide-screen.mp4)
+
+*▶ Click to watch — Champs-Élysées toward the Arc de Triomphe (15s).*
 
 **2. Three screens around your treadmill** — two spare machines open `/left` and `/right`, and you get a synchronized 210° wraparound:
 
