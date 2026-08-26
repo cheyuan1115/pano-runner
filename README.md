@@ -8,7 +8,8 @@ A self-hosted **virtual treadmill runner**: it renders Street View panoramas wit
 
 ![sakura run demo](docs/demo.gif)
 
-*Osaka Mint sakura tunnel, April 2012 historical imagery — one of the built-in "time machine" trails.*
+*Osaka Mint sakura tunnel, April 2012 historical imagery — one of the built-in "time machine" trails.
+The GIF is 6 fps for size — [**watch the true 30 fps capture**](docs/demo-30fps.mp4) to see the actual motion.*
 
 ## One engine, three ways to run
 
