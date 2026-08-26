@@ -1512,6 +1512,15 @@ async function enterVR() {
     const ses = await navigator.xr.requestSession('immersive-vr',
       { optionalFeatures: ['local-floor'] });
     xr.session = ses;
+    // zoom 5 進 VR 不可用:VR 是整圈 360° 抓細節,zoom 5 貼圖 13312×6144
+    //(一顆全景 327 MB),Quest 的記憶體裝不下,配置失敗整片黑(使用者實測)。
+    // 而且 Quest 1 面板約 14 px/度,zoom 4 的 18.5 px/度已超出螢幕極限,
+    // zoom 5 在這台上本來就看不出差別 —— 進 VR 自動夾回 4。
+    if (S.zoom > 4) {
+      S.zoom = 4;
+      S.note = '📺 VR 畫質自動改 4(5 的整圈貼圖會爆記憶體變黑屏)';
+      if (!S.running) reloadSoon();
+    }
     // ignoreDepthValues 一定要開。我們的著色器是全螢幕貼球面、從來不寫深度，
     // 深度緩衝裡是垃圾 —— Quest 的合成器預設會拿深度做每眼的重投影，
     // 照著垃圾扭曲的兩眼對不上，看起來就是「左右眼畫面快速閃動」，
