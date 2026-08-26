@@ -659,7 +659,9 @@ function drawInner() {
          + `${Math.round(hHalfDeg() * 2 * S.panels)}°${S.fit ? '　自動比例' : ''}\n`)
     + (S.panelIdx !== null ? `🖥 ${['左', '中', '右'][S.panelIdx]}片（${S.role === 'master' ? '主控' : '從屬'}）   ` : '')
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
-    + (xr.session && STK.seen ? `🕹 ${STK.kmh.toFixed(1)} km/h   `
+    + (QZS.at && Date.now() - QZS.at < 4000
+         ? `🏃 QZ ${(QZS.kmh || 0).toFixed(1)} km/h${QZS.heart ? `  ♥${QZS.heart}` : ''}   `
+       : xr.session && STK.seen ? `🕹 ${STK.kmh.toFixed(1)} km/h   `
        : xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   `
        : xr.session && HB.at ? `👣 ${HB.kmh.toFixed(1)} km/h   ` : '')
     + (S.photoFail ? `🖼 照片載不到 ×${S.photoFail}   ` : '')
@@ -905,21 +907,24 @@ async function stepOnce() {
 
   // 手擺速只在「最近有讀到控制器」時生效 —— 放下控制器 2.5 秒後
   // 回到啟動器設定的固定速度（不然速度會凍在放下前的值）
-  const paceSrc = () => (xr.session && STK.seen) ? 'stick'
+  const paceSrc = () => (QZS.at && Date.now() - QZS.at < 4000) ? 'qz'
+                      : (xr.session && STK.seen) ? 'stick'
                       : (xr.session && VH.seen && Date.now() - VH.at < 2500
                           && Date.now() - ST.at > 10000) ? 'hand'
                       : (xr.session && HB.at && Date.now() - HB.at < 2500) ? 'head'
                       : (S.mic ? 'mic' : null);
   if (paceSrc()) {
     const read = () => { const p = paceSrc();
-      return p === 'stick' ? STK.kmh
+      return p === 'qz' ? Math.max(0, QZS.kmh || 0)
+           : p === 'stick' ? STK.kmh
            : p === 'hand' ? Math.min(S.kmhCap || 12, VH.kmh)
            : p === 'head' ? Math.min(S.kmhCap || 12, HB.kmh)
            : micSpeed(); };
     S.kmh = read();
     // 停住的時候不要一直丟出轉場，等訊號回來
     while (S.running && S.kmh < 1.5 && paceSrc()) {
-      S.note = paceSrc() === 'stick' ? T('⏸ 搖桿放開了（前推就走）', '⏸ Stick released — push forward to run')
+      S.note = paceSrc() === 'qz' ? T('⏸ 跑步機停了（QZ）', '⏸ Treadmill stopped (QZ)')
+             : paceSrc() === 'stick' ? T('⏸ 搖桿放開了（前推就走）', '⏸ Stick released — push forward to run')
              : paceSrc() === 'hand' ? T('⏸ 手停了，畫面停住（擺手就走）', '⏸ Hands stopped — swing to run')
              : paceSrc() === 'head' ? T('⏸ 腳步停了，畫面停住（原地踏步就走）', '⏸ Steps stopped — jog in place to run')
              : T('⏸ 沒有腳步聲，畫面停住', '⏸ No footsteps heard — paused');
@@ -2005,6 +2010,18 @@ const ST = { armed: true, at: 0, btn: false };
 // 放開=停。推過一次之後(STK.seen)搖桿就接管速度 —— 明確的操作
 // 優先於手擺/頭部起伏的猜測。前推是 y 負方向,跟「往下撥=回頭」不衝突。
 const STK = { kmh: 0, at: 0, seen: false };
+// QZ(qdomyos-zwift)真實跑步機數據:伺服器收 OSC,這裡每秒問一次。
+// 4 秒內有新鮮數據就是最高優先的速度來源 —— 藍牙讀出來的真實速度,
+// 比任何用猜的(麥克風/手擺/頭部)都準;斷線自動退回原本機制。
+const QZS = { kmh: null, heart: 0, at: 0 };
+setInterval(async () => {
+  try {
+    const j = await (await fetch('/api/qz', { signal: AbortSignal.timeout(900) })).json();
+    if (j && j.at && j.age != null && j.age < 4000) {
+      QZS.kmh = j.kmh; QZS.heart = Math.round(j.heart || 0); QZS.at = Date.now();
+    }
+  } catch {}
+}, 1000);
 function vrStick() {
   const ses = xr.session;
   if (!ses) return;

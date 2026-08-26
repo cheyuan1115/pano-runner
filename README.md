@@ -40,7 +40,7 @@ This is a personal research project. See [Data sources & fair use](#data-sources
 ## Features
 
 - **Own WebGL renderer** — panorama tiles → sphere → rectilinear / cylindrical / hybrid Panini projection. Continuous 200°+ ultra-wide with straight verticals, or classic 3/5/7-panel walls.
-- **Runs like running** — speed from a slider, a microphone listening to your treadmill footsteps (cadence detection), VR hand-swing, head-bob, or thumbstick.
+- **Runs like running** — speed from a slider, a microphone listening to your treadmill footsteps (cadence detection), VR hand-swing, head-bob, thumbstick — or **real treadmill metrics via [QZ](https://github.com/cagnulein/qdomyos-zwift)** (speed + heart rate over OSC).
 - **Voice control** (English & zh-TW, auto-selected) — "turn left", "turn around", "run to Central Park", "describe", "stop running".
 - **Tour guide built in** — nearby landmarks fetched from Wikidata/Wikipedia with photos, narrated with Google TTS and synced subtitles.
 - **AI live guide** — no landmark data? One command sends the current view + GPS facts to Gemini, which improvises a grounded, hallucination-resistant intro — while the view *rewinds* along your path so the narration starts exactly where you asked.
@@ -71,6 +71,7 @@ Optional integrations (each degrades gracefully if absent):
 | Gemini AI guide | `~/.keys/geminikey` — a Gemini API key |
 | Wikimedia politeness | `PANO_CONTACT=you@example.com` env var (goes into the User-Agent, per Wikimedia policy) |
 | VR | open the printed `https://<lan-ip>:8878` URL from the headset browser (self-signed cert in `cert/`) |
+| Real treadmill speed | [QZ](https://github.com/cagnulein/qdomyos-zwift): set OSC output to `<server-ip>:9005` (port: `PANO_QZ_PORT`). Speed takes over automatically; falls back after 4s of silence |
 
 ## Architecture (600-line server, zero deps)
 

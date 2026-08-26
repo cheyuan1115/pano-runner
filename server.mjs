@@ -56,6 +56,60 @@ function lanIP() {
   return 'localhost';
 }
 const xlMem = new Map();   // 地名翻譯快取:星巴克→Starbucks
+
+// ── QZ(qdomyos-zwift)整合:社群 issue #1 ──────────────────
+// QZ 用藍牙讀真實跑步機數據,每秒對指定 ip:port 送一包 OSC bundle
+// (格式見 qdomyos-zwift/src/osc.cpp):/QZ/Speed 是 float32 km/h,
+// 另有 Heart/Cadence/Inclination 等。這裡開 UDP 收、解析、存最新一包,
+// 跑步頁每秒來 /api/qz 拿。QZ 那頭設定:OSC ip=本機區網 IP,port=9005
+//(可用 PANO_QZ_PORT 改)。
+import { createSocket } from 'node:dgram';
+const qz = { at: 0, kmh: null, heart: 0, cad: 0, incl: 0 };
+function oscParse(buf) {
+  const out = {};
+  const readMsg = b => {
+    let z = b.indexOf(0); if (z < 0) return;
+    const addr = b.toString('ascii', 0, z);
+    let o = (z + 4) & ~3;
+    z = b.indexOf(0, o); if (z < 0) return;
+    const tags = b.toString('ascii', o, z);
+    o = (z + 4) & ~3;
+    const vals = [];
+    for (const t of tags.slice(1)) {
+      if (t === 'f') { vals.push(b.readFloatBE(o)); o += 4; }
+      else if (t === 'i') { vals.push(b.readInt32BE(o)); o += 4; }
+      else if (t === 's') { const e = b.indexOf(0, o); if (e < 0) break;
+        vals.push(b.toString('ascii', o, e)); o = (e + 4) & ~3; }
+      else break;
+    }
+    out[addr] = vals[0];
+  };
+  if (buf.length >= 16 && buf.toString('ascii', 0, 7) === '#bundle') {
+    let o = 16;
+    while (o + 4 <= buf.length) {
+      const len = buf.readInt32BE(o); o += 4;
+      if (len <= 0 || o + len > buf.length) break;
+      readMsg(buf.subarray(o, o + len)); o += len;
+    }
+  } else readMsg(buf);
+  return out;
+}
+const qzSock = createSocket('udp4');
+qzSock.on('message', m => {
+  try {
+    const o = oscParse(m);
+    if (o['/QZ/Speed'] === undefined) return;
+    if (!qz.at) console.log('QZ 已連上,速度', o['/QZ/Speed'], 'km/h');
+    qz.at = Date.now();
+    qz.kmh = o['/QZ/Speed'];
+    if (o['/QZ/Heart'] !== undefined) qz.heart = o['/QZ/Heart'];
+    if (o['/QZ/Cadence'] !== undefined) qz.cad = o['/QZ/Cadence'];
+    if (o['/QZ/Inclination'] !== undefined) qz.incl = o['/QZ/Inclination'];
+  } catch {}
+});
+qzSock.on('error', e => console.log('QZ socket:', e.message));
+try { qzSock.bind(Number(process.env.PANO_QZ_PORT) || 9005); } catch {}
+
 // 跨電腦三螢幕:主控 POST 最新狀態,從屬掛在 SSE 上收。
 // 同一台電腦的多視窗仍走 BroadcastChannel(零延遲);這條是給
 // 「三台電腦各顯示一片」用的,區網延遲個位數毫秒。
@@ -295,6 +349,9 @@ const handler = async (req, res) => {
       if (u.pathname !== '/mid') sp.set('mini', '0');
       res.writeHead(302, { location: '/run.html?' + sp });
       return res.end();
+    }
+    if (u.pathname === '/api/qz') {
+      return json(res, { ...qz, age: qz.at ? Date.now() - qz.at : null });
     }
     if (u.pathname === '/api/sync' && req.method === 'POST') {
       let body = '';
