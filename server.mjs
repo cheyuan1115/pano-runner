@@ -267,6 +267,9 @@ const handler = async (req, res) => {
       }
       const sp = new URLSearchParams(q);
       for (const k of ['panel', 'role', 'net', 'run', 'mic', 'voice']) sp.delete(k);
+      // 三機模式一定走「三片直線透視」:主機常用的連續超廣角(Panini)
+      // 本來就不分片,側機照抄會顯示跟主機一模一樣的全景(實際反饋)。
+      sp.delete('proj'); sp.set('panels', '3');
       sp.set('panel', u.pathname === '/left' ? '0' : u.pathname === '/right' ? '2' : '1');
       sp.set('role', 'follow'); sp.set('net', '1');
       res.writeHead(302, { location: '/run.html?' + sp });

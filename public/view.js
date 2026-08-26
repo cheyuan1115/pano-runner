@@ -1087,9 +1087,15 @@ function bcast() {
         // 有側屏連著:本機自動只畫中間片;都走了就恢復畫全部
         if (j.n > 0 && S.panelIdx === null) {
           S.panelIdx = 1; S.autoPanel = true;
+          // 三機模式要分片:Panini 不分片,主機也得切回直線透視的中央片,
+          // 三台拼起來才是 前/左/右(實際反饋:畫面沒分前左右)
+          if (S.proj === 'pan') { S.prevProj = 'pan'; S.proj = ''; S.panels = 3; }
           S.note = '🖥 側屏已連線,本機改畫中間片';
+          if (!S.running) reloadSoon();
         } else if (j.n === 0 && S.autoPanel) {
           S.panelIdx = null; S.autoPanel = false;
+          if (S.prevProj) { S.proj = S.prevProj; S.prevProj = null; }
+          if (!S.running) reloadSoon();
         }
       })
       .catch(() => {}).finally(() => netBusy = false);
@@ -2734,7 +2740,9 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.has('d')) S.paniniD = +q.get('d');
   if (q.has('zoomper')) S.zoomPer = +q.get('zoomper');
   if (q.get('fit') === '0') S.fit = false;
-  if (S.panelIdx !== null) S.panels = 3;
+  // 帶 panel 的從屬一律直線透視 —— 預設投影是 pan(不分片),
+  // 光靠「網址不帶 proj」蓋不掉預設,側機會顯示跟主機一樣的全景
+  if (S.panelIdx !== null) { S.panels = 3; if (q.get('proj') !== 'pan') S.proj = ''; }
   if (q.has('panels') && S.panelIdx === null) {
     // 網址給的片數要保持總視野 —— 預設 3 片 × 70° = 210°
     const n = Math.max(1, Math.min(9, +q.get('panels')));
