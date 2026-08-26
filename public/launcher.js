@@ -371,7 +371,8 @@ el('quick').onclick = e => {
     location.href = '/run.html?' + opt + '&kmh=' + (el('kmh').value || 12)
       + '&panels=1&proj=pan&zoom=4&run=1'
       + (el('voice').checked ? '&voice=1' : '&voice=0')
-      + (el('narrate').checked ? '&narrate=1' : '&narrate=0');
+      + (el('narrate').checked ? '&narrate=1' : '&narrate=0')
+      + langQ();
     return;
   }
   V.lat = lat; V.lng = lng; V.z = z;
@@ -507,7 +508,7 @@ el('start').onclick = () => {
        : el('lockmonth') && el('lockmonth').value ? { months: el('lockmonth').value } : {}),
     run: '1',
   });
-  location.href = '/run.html?' + p;
+  location.href = '/run.html?' + p + langQ();
 };
 
 el('zin').onclick = () => zoomBy(1);
@@ -516,6 +517,11 @@ el('zout').onclick = () => zoomBy(-1);
 renderRuns();
 drawMap(); say();
 
+// 啟動器的 lang 要跟著帶進跑步頁,不然英文模式按「開始跑」就變回中文
+function langQ() {
+  const l = new URLSearchParams(location.search).get('lang');
+  return l ? '&lang=' + l : '';
+}
 // ── 英文介面 ─────────────────────────────────────────────
 // lang=en 強制;沒帶就看瀏覽器語言。做法:整頁走一遍文字節點,
 // 對照字典換掉 —— 不動任何邏輯,中文版一個位元組都不變。
