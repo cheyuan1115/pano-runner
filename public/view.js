@@ -1135,6 +1135,7 @@ async function followPano(id, head) {
     }
   }
   await P.ready;          // 快取命中但還在載 → 等它載完再回
+  P.loaded = true;
   return P;
 }
 
@@ -1174,9 +1175,53 @@ async function applySync(m) {
 }
 if (S.role === 'follow' && CH) CH.onmessage = e => applySync(e.data);
 if (S.role === 'follow' && S.net) {
-  // 跨電腦從屬:掛在伺服器的 SSE 上。斷線 EventSource 會自己重連。
+  // 跨電腦從屬:插值緩衝(遊戲連線的標準做法)。
+  // Wi-Fi 的訊息是成串抖動到達的(擠一堆、再空一段),照到達節奏畫
+  // 就是「一格一格」;換景訊息一到就切,新全景還沒載好就是「轉彎閃」。
+  // 解法:刻意比主機慢 150ms 播放 —— 在緩衝裡找出跨過「現在-150ms」
+  // 的前後兩筆,線性內插。抖動被緩衝吸收;換景在時間線上晚 150ms
+  // 才發生,全景早就(pre/cur/nxt 一到就開載)在快取裡了。
+  // 這跟先前失敗的「追趕」本質不同:追趕在猜未來,插值在重播
+  // 確定的過去,沒有猜錯的空間。
+  const NB = { buf: [], delay: 150 };
+  const kick = id => { if (id) followPano(id, 0).catch(() => {}); };
   const es = new EventSource('/api/sync');
-  es.onmessage = e => { try { applySync(JSON.parse(e.data)); } catch {} };
+  es.onmessage = e => {
+    try {
+      const m = JSON.parse(e.data);
+      NB.buf.push({ at: performance.now(), m });
+      if (NB.buf.length > 240) NB.buf.shift();
+      kick(m.pre); kick(m.cur); kick(m.nxt);   // 一到就開載,不等上台
+    } catch {}
+  };
+  (function play() {
+    requestAnimationFrame(play);
+    const T = performance.now() - NB.delay;
+    const B = NB.buf;
+    if (!B.length) return;
+    let i = B.length - 1;
+    while (i > 0 && B[i].at > T) i--;
+    const a2 = B[i].m, b2 = B[i + 1] ? B[i + 1].m : null;
+    const Pc = a2.cur && followCache.get(a2.cur);
+    if (!Pc || !Pc.loaded) return;             // 還沒載好:整格凍住,不畫錯的
+    S.cur = Pc;
+    const Pn = a2.nxt && followCache.get(a2.nxt);
+    S.nxt = (Pn && Pn.loaded) ? Pn : null;
+    if (b2 && b2.cur === a2.cur && B[i + 1].at > B[i].at) {
+      const k = Math.min(1, Math.max(0, (T - B[i].at) / (B[i + 1].at - B[i].at)));
+      S.tMove = a2.tMove + (b2.tMove - a2.tMove) * k;
+      S.heading = a2.heading + ad(b2.heading, a2.heading) * k;
+      S.pitch = a2.pitch + (b2.pitch - a2.pitch) * k;
+      S.mix = S.nxt ? a2.mix + (b2.mix - a2.mix) * k : 0;
+    } else {
+      S.tMove = a2.tMove; S.heading = a2.heading; S.pitch = a2.pitch;
+      S.mix = S.nxt ? a2.mix : 0;
+    }
+    S.stepD = a2.stepD; S.travelDir = a2.travelDir; S.sceneR = a2.sceneR;
+    S.zoomPer = a2.zoomPer; S.kmh = a2.kmh; S.moved = a2.moved;
+    S.steps = a2.steps; S.note = a2.note; S.running = a2.running;
+    draw();
+  })();
 }
 
 // 開側翼視窗。瀏覽器一次操作只允許開一個彈出視窗（實測第二個會被擋），
