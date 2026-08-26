@@ -945,6 +945,7 @@ async function stepOnce() {
   // 疊 90ms 看起來就是畫面閃一下 —— 轉彎角度大就不溶解，直接硬切。
   const startHead = S.heading, aimHead = link.heading;
   const turnAng = Math.abs(ad(aimHead, startHead));
+  S.stepTurn = turnAng;                 // 側屏要靠它決定轉彎時硬切
   const DISS = Math.min(0.5,
     (xr.session ? (turnAng > 25 ? 8 : 90) : S.dissolveMs) / span);
   let frames = 0;
@@ -1072,6 +1073,7 @@ function bcast() {
     cur: S.cur && S.cur.meta ? S.cur.meta.pano : null,
     nxt: S.nxt && S.nxt.meta ? S.nxt.meta.pano : null,
     pre: queue.length ? queue[0].link.id : null,
+    turn: S.stepTurn || 0,
   };
   CH.postMessage(msg);
   // 跨電腦:丟給伺服器轉發,30Hz、上一發沒回來就跳過。主控永遠推 ——
@@ -1132,6 +1134,16 @@ async function followPano(id, head) {
 let followBusy = false;
 async function applySync(m) {
   S.heading = m.heading; S.pitch = m.pitch; S.tMove = m.tMove; S.mix = m.mix;
+  // 側片的閃動抑制(實際反饋:左右畫面偶爾閃、轉彎更常)——
+  // 溶解期間兩顆全景疊著畫,側面視角的內容差異比正前方大得多,
+  // 260ms 的交叉淡化看起來就是閃一下。跟 VR 同一帖藥:
+  // 側片把溶解壓短 3 倍;這一步轉彎超過 25° 就不溶解,直接硬切。
+  if (S.panelIdx !== null && S.panelIdx !== 1) {
+    let mix = m.mix;
+    mix = Math.max(0, Math.min(1, (mix - 0.5) * 3 + 0.5));
+    if ((m.turn || 0) > 25) mix = mix > 0.5 ? 1 : 0;
+    S.mix = mix;
+  }
   S.stepD = m.stepD; S.travelDir = m.travelDir; S.kmh = m.kmh;
   S.moved = m.moved; S.steps = m.steps; S.note = m.note; S.running = m.running;
   S.zoomPer = m.zoomPer; S.sceneR = m.sceneR;
