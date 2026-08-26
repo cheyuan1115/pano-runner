@@ -527,8 +527,14 @@ function langQ() {
 // 對照字典換掉 —— 不動任何邏輯,中文版一個位元組都不變。
 (function () {
   const q0 = new URLSearchParams(location.search);
-  const EN = q0.get('lang') === 'en'
-    || (!q0.get('lang') && !/^zh/.test(navigator.language || ''));
+  let EN;
+  try {
+    const q = q0.get('lang');
+    if (q) localStorage.setItem('pano-lang', q);
+    const p = q || localStorage.getItem('pano-lang');
+    EN = p ? p === 'en'
+       : !(navigator.languages || [navigator.language]).some(l => /^zh/i.test(l || ''));
+  } catch { EN = false; }
   if (!EN) return;
   document.title = 'pano-runner launcher';
   const D = {

@@ -21,8 +21,12 @@
   if (window.__voice) return;
   // 英文模式:辨識引擎切 en-US、改用英文指令詞表(跟介面同一套判斷)
   const Q9 = new URLSearchParams(location.search);
-  const EN_V = Q9.get('lang') === 'en'
-    || (!Q9.get('lang') && !/^zh/.test(navigator.language || ''));
+  let EN_V;
+  try {
+    const p = Q9.get('lang') || localStorage.getItem('pano-lang');
+    EN_V = p ? p === 'en'
+         : !(navigator.languages || [navigator.language]).some(l => /^zh/i.test(l || ''));
+  } catch { EN_V = false; }
 
   const WORDS = {
     // 後面那幾個是辨識常見的同音誤判 —— zh-TW 對單音節特別不準，

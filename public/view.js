@@ -190,8 +190,18 @@ const BASE_ZOOM = 2;
 const Q0 = new URLSearchParams(location.search);
 // 英文模式:lang=en 強制,沒帶就看瀏覽器語言(非中文 → 英文)。
 // 語音指令維持中文(那是辨識詞表,不是介面)。
-const EN_UI = Q0.get('lang') === 'en'
-  || (!Q0.get('lang') && !/^zh/.test(navigator.language || ''));
+const EN_UI = (() => {
+  // lang= 參數優先且會記住(localStorage);沒有就看瀏覽器語言「清單」——
+  // 只看第一語言會誤判(英文版 Chrome+中文系統的人,清單第一個是 en,
+  // 但清單裡有 zh —— 實測就是這樣被判成英文的)
+  try {
+    const q = Q0.get('lang');
+    if (q) localStorage.setItem('pano-lang', q);
+    const p = q || localStorage.getItem('pano-lang');
+    if (p) return p === 'en';
+  } catch {}
+  return !(navigator.languages || [navigator.language]).some(l => /^zh/i.test(l || ''));
+})();
 const T = (zh, en) => EN_UI ? en : zh;
 const rad = x => x * Math.PI / 180;
 const ad = (a, b) => ((a - b) % 360 + 540) % 360 - 180;
