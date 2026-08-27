@@ -229,6 +229,8 @@ const EN_UI = (() => {
   return !(navigator.languages || [navigator.language]).some(l => /^zh/i.test(l || ''));
 })();
 const T = (zh, en) => EN_UI ? en : zh;
+// 例行清空 S.note 前先問這個:重大狀態轉換(棄標等)的訊息鎖 15 秒
+const noteFree = () => !S.noteHold || Date.now() > S.noteHold;
 const rad = x => x * Math.PI / 180;
 const ad = (a, b) => ((a - b) % 360 + 540) % 360 - 180;
 
@@ -670,7 +672,8 @@ function drawInner() {
       + (S.watchLm ? `　👁 盯著 ${S.watchLm.name}` : '')
       // 「跑到○○」之後最想一眼看到的就是還剩幾公尺,收摺列也要有
       + (S.target ? `　⌖ ${S.target.lm ? S.target.lm.name : `第 ${S.targetNo} 點`}`
-         + ` ${Math.round(distM(m, S.target))} m` : '')
+         + ` ${Math.round(distM(m, S.target))} m`
+         : `　🧭 ${T('自由跑', 'free run')}`)
     + (S.speaking ? `　🔊 ${S.nowSpeaking}`
          : S.nextLm ? `　🎧 ${S.nextLm.name} ${Math.round(S.nextLm.d)} m` : '')
       + (S.note ? `　${S.note}` : '');
@@ -711,7 +714,8 @@ function drawInner() {
        : S.nextLm ? `　🎧 ${S.nextLm.name} ${Math.round(S.nextLm.d)} m` : '')
     + (S.target ? `　⌖ ${S.target.lm ? S.target.lm.name : `第 ${S.targetNo} 點`}`
        + ` ${Math.round(distM(S.cur.meta, S.target))} m`
-       + (S.targets.length ? `（還有 ${S.targets.length} 個）` : '') : '')
+       + (S.targets.length ? `（還有 ${S.targets.length} 個）` : '')
+       : `　🧭 ${T('自由跑', 'free run')}`)
     + (S.track.length ? `　紀錄 ${S.track.length} 點（按 s 匯出 GPX）` : '') + '\n'
     + `這顆 ${S.cur.tiles} 塊　等 ${Math.round(S.lastMs)} ms　排隊 ${queue.length}　`
     + `共 ${(netBytes / 1048576).toFixed(1)} MB\n`
@@ -895,7 +899,7 @@ async function fillLoop() {
     // 只有佇列第一顆才吃轉向意圖 —— 後面那幾顆是推測，不該把意圖用掉
     const useWish = queue.length === 0 ? S.wish : null;
     let link = pickLink(meta, dir, useWish);
-    if (link && useWish) { S.wish = null; S.note = ''; }
+    if (link && useWish) { S.wish = null; if (noteFree()) S.note = ''; }
     if (!link) link = pickLink(meta, dir, null);      // 這個路口沒有那一側的路，先直行
     if (!link) return;
     const P = mkPano();
@@ -968,7 +972,7 @@ async function stepOnce() {
       draw(); await sleep(400); S.kmh = read();
     }
     if (!S.running) return;
-    S.note = '';
+    if (noteFree()) S.note = '';
   }
   const d = link.d || 10;
   // 動畫佔滿整步的時間。先前是「動 0.8 倍步時、然後 sleep 補足配速」，
@@ -1078,7 +1082,7 @@ async function stepOnce() {
   }
   // 只有還在跑的時候才清訊息。結束指令下達時這一步的動畫往往還在跑，
   // 它跑完就把「已存檔」那行洗掉了 —— 實測結束後提示是空的。
-  if (S.running && !/^🖥/.test(S.note)) S.note = '';
+  if (S.running && !/^🖥/.test(S.note) && noteFree()) S.note = '';
   draw();
   // 不再另外 sleep —— 動畫本身就是這一步的時間，中間沒有靜止的空檔
 }
@@ -2556,7 +2560,12 @@ async function maybeNarrate(meta) {
     if (d < 90) { endDetour(); lm.ai ? aiGuide() : speak(lm); return; }
     // 放寬到 600 公尺沒「進步」才放棄 —— 景點常常要繞過街廓才到得了
     if (S.moved - S.bestAt > 600) {
-      S.note = `⌖ ${lm.name} 過不去，繼續跑`;
+      // 棄標是重大狀態轉換:叮一聲+訊息鎖 15 秒,不能像例行提示一閃而過
+      //(實際反饋:目標默默消失,使用者不知道系統下一步要幹嘛)
+      S.note = T(`⌖ ${lm.name} 過不去，放棄目標，改自由跑`,
+                 `⌖ Couldn't reach ${lm.name} — free running now`);
+      S.noteHold = Date.now() + 15000;
+      chime();
       endDetour();
     }
     return;
