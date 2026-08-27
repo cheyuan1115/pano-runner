@@ -2539,21 +2539,29 @@ async function maybeNarrate(meta) {
     } catch { S.nearby = []; }
   }
   refreshNext(meta);
-  if (S.speaking) return;
 
   // 繞路中：到了就播報。判斷依據是「目前的目標帶著 lm」，
   // 不能用 detourFrom（它初始就是 null，!== undefined 永遠成立）。
+  // 這一段要在「播報中」也持續追蹤進度 —— 兩個實測踩過的雷:
+  // 1. best 更新原本只在 checkTarget(對 lm 目標直接 return)——
+  //    等於 600m 預算從出發就倒數,「跑到」超過 600m 的目標
+  //    必定半路被誤判「過不去」放棄(聖母院 1.5km 實測)
+  // 2. 原本整段躲在 if(S.speaking)return 後面 —— 連下幾次「介紹」,
+  //    播報期間進度凍結,更快觸發放棄
   if (S.target && S.target.lm) {
     const lm = S.target.lm;
     const d = distM(meta, S.target);
+    if (d < S.bestToTarget - 5) { S.bestToTarget = d; S.bestAt = S.moved; }
+    if (S.speaking) return;
     if (d < 90) { endDetour(); lm.ai ? aiGuide() : speak(lm); return; }
-    // 繞路放寬到 600 公尺沒進步才放棄 —— 景點常常要繞過街廓才到得了
+    // 放寬到 600 公尺沒「進步」才放棄 —— 景點常常要繞過街廓才到得了
     if (S.moved - S.bestAt > 600) {
       S.note = `⌖ ${lm.name} 過不去，繼續跑`;
       endDetour();
     }
     return;
   }
+  if (S.speaking) return;
 
   if (S.askMode) {
     // 前方 300 公尺內、還沒問過的就問。300 公尺在 14 km/h 下約 77 秒，
