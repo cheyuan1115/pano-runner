@@ -2504,7 +2504,9 @@ async function gotoLm(text) {
   S.note = `⌖ 找「${q}」…`; draw();
   let items = [];
   try {
-    const r = await fetch(`/api/nearby?ll=${m.lat},${m.lng}&r=3000&q=${encodeURIComponent(q)}`,
+    // 15 公里=全城尺度:「跑到」是目的地指令,3 公里是「順路繞去」的量,
+    // 香榭麗舍喊聖母院(4.5km)都搆不到(實際反饋)
+    const r = await fetch(`/api/nearby?ll=${m.lat},${m.lng}&r=15000&q=${encodeURIComponent(q)}`,
       { signal: AbortSignal.timeout(8000) });
     items = (await r.json()).items || [];
   } catch {}
@@ -2518,7 +2520,10 @@ async function gotoLm(text) {
       items = (await r.json()).items || [];
     } catch {}
   }
-  if (!items.length) { S.note = `⚠ 3 公里內找不到「${q}」`; draw(); return; }
+  if (!items.length) {
+    S.note = T(`⚠ 15 公里內找不到「${q}」`, `⚠ Couldn't find "${q}" within 15 km`);
+    draw(); return;
+  }
   detourTo(items[0]);                       // 已按距離排序,取最近的那個
 }
 
