@@ -136,8 +136,21 @@ async function placesPhotos(query, lat, lng) {
     signal: AbortSignal.timeout(8000) });
   const j = await r.json();
   if (j.error) { console.log('Places:', j.error.status || j.error.message); return []; }
-  const ph = j.places?.[0]?.photos || [];
-  console.log(`Places「${query}」→ ${j.places?.[0]?.displayName?.text || '無'},照片 ${ph.length} 張`);
+  const pl = j.places?.[0];
+  // 距離守門:locationBias 只是偏好不是限制,泛泛的關鍵字會撈到
+  // 地球另一端的店(實測在巴黎撈到台灣市場)。超過 30 公里就作廢。
+  if (pl?.location) {
+    const toRad = v => v * Math.PI / 180;
+    const dp = toRad(pl.location.latitude - lat), dl = toRad(pl.location.longitude - lng);
+    const h = Math.sin(dp / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(pl.location.latitude)) * Math.sin(dl / 2) ** 2;
+    const dist = 2 * 6371000 * Math.asin(Math.sqrt(h));
+    if (dist > 30000) {
+      console.log(`Places「${query}」→ ${pl.displayName?.text},但在 ${Math.round(dist / 1000)} km 外,照片作廢`);
+      return [];
+    }
+  }
+  const ph = pl?.photos || [];
+  console.log(`Places「${query}」→ ${pl?.displayName?.text || '無'},照片 ${ph.length} 張`);
   return ph.slice(0, 5).map(p2 => '/pphoto?n=' + encodeURIComponent(p2.name));
 }
 const cityMem = new Map();
