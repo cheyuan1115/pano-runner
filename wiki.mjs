@@ -272,7 +272,7 @@ const PLACE_QIDS = [
   'Q2087181', // 歷史建築
 ].map(q => 'wd:' + q).join(' ');
 
-async function sparqlSpots(lat, lng, km) {
+async function sparqlSpots(lat, lng, km, limit = 80) {
   const q = `SELECT ?zh ?lat ?lon ?img (COUNT(DISTINCT ?site) AS ?links) WHERE {
   SERVICE wikibase:around {
     ?item wdt:P625 ?coord .
@@ -284,7 +284,7 @@ async function sparqlSpots(lat, lng, km) {
   OPTIONAL { ?item wdt:P18 ?img }
   ?site schema:about ?item .
   ?item p:P625/psv:P625 ?cv . ?cv wikibase:geoLatitude ?lat ; wikibase:geoLongitude ?lon .
-} GROUP BY ?zh ?lat ?lon ?img ORDER BY DESC(?links) LIMIT 80`;
+} GROUP BY ?zh ?lat ?lon ?img ORDER BY DESC(?links) LIMIT ${limit}`;
   // 429/5xx 要退避重試,不能立刻放棄 —— 一放棄就落到 legacy 那條重 API 鏈,
   // 在被封的時候等於雪上加霜
   let r = null;
@@ -408,6 +408,18 @@ export async function fetchPhoto(url, tries = 4) {
 
 // 逐句切開當字幕用
 const sentences = t => (t.match(/[^。！？!?]+[。！？!?]?/g) || []).map(s => s.trim()).filter(s => s.length > 1);
+
+// 城市級景點:半徑 7 公里、上限 200,一次 SPARQL 拿完 —— 給啟動器
+// 標整個城市的橘點用。比逐格轟炸禮貌得多(1 個查詢 vs 81 個)。
+// 只回地圖需要的最小欄位;導覽稿與照片等真的跑到那附近時
+// 由既有的逐格管線補。
+export async function citySpots(lat, lng) {
+  const rows = await sparqlSpots(lat, lng, 7, 200);
+  return rows
+    .filter(c => c.links >= 3)
+    .map(c => ({ id: 'c:' + c.zh, name: c.zh, lat: c.lat, lng: c.lng,
+                 cat: 'see', links: c.links }));
+}
 
 export async function wikiNearby(lat, lng, {
   radius = 1200, minLinks = 3, limit = 12, minChars = 60,

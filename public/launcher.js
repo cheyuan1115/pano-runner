@@ -313,7 +313,7 @@ const say = () => {
 let warmSeq = 0;
 async function warmSpots(lat, lng) {
   const seq = ++warmSeq;
-  fetch(`/api/wikiwarm?ll=${lat},${lng}`).catch(() => {});
+  fetch(`/api/citywarm?ll=${lat},${lng}`).catch(() => {});   // 整城單一查詢
   for (const d of [2500, 4000, 6000, 8000, 10000, 15000, 20000]) {
     await new Promise(r => setTimeout(r, d));
     if (seq !== warmSeq) return;             // 使用者又搜了別的地方

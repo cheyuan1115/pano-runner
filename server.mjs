@@ -13,7 +13,7 @@ import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findPano, panoMeta } from './pano.mjs';
-import { wikiNearby } from './wiki.mjs';
+import { wikiNearby, citySpots } from './wiki.mjs';
 
 // 景點資料沿用 run-world 那份（745 個，12 個城市，含導覽稿）。
 // 直接讀原檔而不是複製一份 —— 那邊修了座標這邊立刻同步。
@@ -117,6 +117,35 @@ try { qzSock.bind(Number(process.env.PANO_QZ_PORT) || 9005); } catch {}
 // 跨電腦三螢幕:主控 POST 最新狀態,從屬掛在 SSE 上收。
 // 同一台電腦的多視窗仍走 BroadcastChannel(零延遲);這條是給
 // 「三台電腦各顯示一片」用的,區網延遲個位數毫秒。
+// 城市級景點快取:key = 約 5.5 公里網格。記憶體+磁碟(30 天),
+// busy 去重(同城市併發只查一次)。
+const cityMem = new Map();
+const cityBusy = new Map();
+const cityKey = (lat, lng) => `city_${Math.round(lat * 20)}_${Math.round(lng * 20)}`;
+async function loadCity(lat, lng, wait, kick = true) {
+  const k = cityKey(lat, lng);
+  if (cityMem.has(k)) return cityMem.get(k);
+  try {
+    const o = JSON.parse(await readFile(join(WIKI_DIR, k + '.json'), 'utf8'));
+    if (Date.now() - o.at < 30 * 86400e3) { cityMem.set(k, o.items); return o.items; }
+  } catch {}
+  if (!kick) return [];   // 只拿現貨:地圖亂滑不該引發查詢風暴
+  if (cityBusy.has(k)) return wait ? cityBusy.get(k) : [];
+  const job = (async () => {
+    try {
+      const items = await citySpots(lat, lng);
+      cityMem.set(k, items);
+      await mkdir(WIKI_DIR, { recursive: true });
+      await writeFile(join(WIKI_DIR, k + '.json'), JSON.stringify({ at: Date.now(), items }))
+        .catch(() => {});
+      console.log(`城市景點 ${k}:${items.length} 個`);
+      return items;
+    } catch (e) { console.log('城市景點查詢失敗:' + (e.message || e)); return []; }
+    finally { setTimeout(() => cityBusy.delete(k), 1000); }
+  })();
+  cityBusy.set(k, job);
+  return wait ? job : [];
+}
 const syncClients = new Set();
 let syncLast = null;
 
@@ -285,6 +314,19 @@ const handler = async (req, res) => {
           for (const x of w)
             if (!seen.has(x.id) && x.lat >= s0 && x.lat <= n0 && x.lng >= w0 && x.lng <= e0) {
               seen.add(x.id); hit.push(x);
+            }
+        }
+      }
+      // 城市級快取也合進來(bbox 中心與四鄰的 5.5km 網格,現貨才拿)。
+      // 用名字去重 —— 人工/逐格/城市級三個來源的 id 系統不同。
+      {
+        const names = new Set(hit.map(x => x.name));
+        const cLat = (s0 + n0) / 2, cLng = (w0 + e0) / 2, g = 1 / 20;
+        for (const [di, dj] of [[0,0],[g,0],[-g,0],[0,g],[0,-g]]) {
+          // 只有中心格准觸發新查詢,鄰格拿現貨 —— 亂滑地圖不打維基
+          for (const x of await loadCity(cLat + di, cLng + dj, false, di === 0 && dj === 0))
+            if (!names.has(x.name) && x.lat >= s0 && x.lat <= n0 && x.lng >= w0 && x.lng <= e0) {
+              names.add(x.name); hit.push(x);
             }
         }
       }
@@ -692,6 +734,13 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
       res.writeHead(204); return res.end();
     }
     // 預熱：把一個點周圍九格的維基景點先抓好，跑步時就不會有空窗。
+    // 搜尋城市後的「整城景點」:單一 SPARQL(半徑 7km、上限 200)
+    if (u.pathname === '/api/citywarm') {
+      const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
+      if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
+      const items = await loadCity(lat, lng, true);
+      return json(res, { n: items.length });
+    }
     if (u.pathname === '/api/wikiwarm') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
       if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
