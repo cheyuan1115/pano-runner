@@ -114,6 +114,11 @@
     V.last = text;
   };
 
+  // 「介紹」vs「介紹○○」的搶跑問題:辨識是分段吐的,「介紹皇后鎮星巴克」
+  // 會先送出「介紹」(中途結果)→ 立刻觸發看畫面版;完整句到齊時指名版
+  // 已被 busy 擋掉(實際反饋)。解法:單獨「介紹」憋 900ms 再執行,
+  // 期間出現「介紹+名字」就取消原版、改跑指名版。
+  let pendGuide = null;
   const fire = (cmd, text) => {
     // 播報導覽的時候，麥克風收到的是自己的喇叭聲。旁白裡出現「介紹」「右」
     // 這種字很常見，照收的話會被自己的旁白指揮。
@@ -124,11 +129,16 @@
     if (cmd === lastCmd && Date.now() - lastAt < 2000) return;
     lastCmd = cmd; lastAt = Date.now();
     V.heard++;
-    if (typeof window.__turn === 'function') {
-      // 這裡丟例外的話 onresult 會中斷，後面的句子就都收不到了
-      try { window.__turn(cmd, text); }
-      catch (e) { V.error = 'turn:' + (e && e.message || e); }
-    }
+    const go = () => {
+      if (typeof window.__turn === 'function') {
+        // 這裡丟例外的話 onresult 會中斷，後面的句子就都收不到了
+        try { window.__turn(cmd, text); }
+        catch (e) { V.error = 'turn:' + (e && e.message || e); }
+      }
+    };
+    if (cmd === 'aiguide') { clearTimeout(pendGuide); pendGuide = setTimeout(go, 900); return; }
+    if (cmd === 'aiabout') { clearTimeout(pendGuide); pendGuide = null; }
+    go();
   };
 
   const build = myGen => {
