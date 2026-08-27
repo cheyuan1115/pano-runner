@@ -803,16 +803,31 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
   }
 };
 
-createServer(handler).listen(PORT, () => console.log(`pano-runner  http://localhost:${PORT}`));
-
-// HTTPS 給 VR 用。WebXR 只在安全脈絡下存在 —— Quest 的瀏覽器開
-// http://192.168.x.x 時 navigator.xr 直接是 undefined。
-// 自簽憑證第一次連會警告，按「繼續」一次就好。憑證不存在就跳過，不影響一般使用。
+// 8877 同時聽 http 與 https:很多電視/怪瀏覽器會強制把網址升級成
+// https 打進 http 埠(ERR_SSL_PROTOCOL_ERROR,實測電視兩顆瀏覽器都這樣,
+// 使用者根本改不掉)。TLS 的第一個位元組一定是 0x16(ClientHello),
+// 嗅一下就能分流 —— 對方愛講哪種話都通。
+import { createServer as createNet } from 'node:net';
+const httpSrv = createServer(handler);
+let tlsSrv = null;
 try {
   const [key, cert] = await Promise.all([
     readFile(join(fileURLToPath(new URL('.', import.meta.url)), 'cert', 'key.pem')),
     readFile(join(fileURLToPath(new URL('.', import.meta.url)), 'cert', 'cert.pem')),
   ]);
-  createTls({ key, cert }, handler).listen(PORT + 1, () =>
+  tlsSrv = createTls({ key, cert }, handler);
+  // 8878 維持純 HTTPS(VR 用;WebXR 只在安全脈絡下存在)
+  tlsSrv.listen(PORT + 1, () =>
     console.log(`pano-runner  https://${lanIP()}:${PORT + 1}  （VR 用）`));
 } catch { console.log('沒有憑證，HTTPS 未啟動（VR 需要它）'); }
+createNet(sock => {
+  sock.once('data', head => {
+    sock.pause();
+    sock.unshift(head);
+    (head[0] === 0x16 && tlsSrv ? tlsSrv : httpSrv).emit('connection', sock);
+    // resume 一定要等下一個 tick:TLS 端要先把自己的監聽掛上,
+    // 同步 resume 的話 ClientHello 被吐回去卻沒人接,握手就停在那
+    process.nextTick(() => sock.resume());
+  });
+  sock.on('error', () => {});
+}).listen(PORT, () => console.log(`pano-runner  http(s)://localhost:${PORT}`));
