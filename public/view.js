@@ -18,6 +18,22 @@
 const cv = document.getElementById('gl');
 const hud = document.getElementById('hud');
 const gl = cv.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+// 裝置回報:電視/陌生裝置卡在「載入中」時,遠端根本不知道它死在哪 ——
+// 把 JS 錯誤和開機關卡打回伺服器日誌(/api/vlog),在主機 tail 就看得到
+const beacon = (ev, extra) => {
+  try { fetch('/api/vlog', { method: 'POST', keepalive: true,
+    body: JSON.stringify({ ev: 'dev:' + ev, ua: navigator.userAgent.slice(0, 60), ...extra }) }).catch(() => {}); } catch {}
+};
+window.addEventListener('error', e =>
+  beacon('jserror', { msg: String(e.message).slice(0, 160), src: String(e.filename).split('/').pop() + ':' + e.lineno }));
+if (!gl) {
+  beacon('no-webgl');
+  document.body.innerHTML = '<div style="color:#fff;font:18px/1.8 sans-serif;padding:40px">'
+    + '這台裝置的瀏覽器不支援 WebGL,畫不出街景。<br>'
+    + 'This browser has no WebGL support.</div>';
+  throw new Error('no webgl');
+}
+beacon('boot');
 if (!gl) hud.textContent = '這個瀏覽器沒有 WebGL';
 
 const VS = `
@@ -25,8 +41,14 @@ attribute vec2 aPos;
 varying vec2 vUV;
 void main() { vUV = aPos; gl_Position = vec4(aPos, 0.0, 1.0); }`;
 
+// 老 GPU(電視、廉價平板)的片段著色器不支援 highp,寫死會直接
+// 編譯失敗(實測 BeyondTV:'highp' precision is not supported)。
+// 問一下裝置,不行就降 mediump —— 畫質稍軟,但能動遠勝於白畫面。
+const FRAG_PREC = (gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT)?.precision > 0)
+  ? 'highp' : 'mediump';
+if (FRAG_PREC !== 'highp') beacon('mediump-fallback');
 const FS = `
-precision highp float;
+precision ${FRAG_PREC} float;
 varying vec2 vUV;
 uniform sampler2D uBase, uDet;
 uniform float uYaw, uPitch, uTanHalf, uAspect, uAlpha;
@@ -1216,9 +1238,11 @@ if (S.role === 'follow' && S.net) {
   //(實際反饋:側機解析度差一點,就是這個)
   const kick = (id, dir) => { if (id) followPano(id, dir).catch(() => {}); };
   const es = new EventSource('/api/sync');
+  let firstMsg = true;
   es.onmessage = e => {
     try {
       const m = JSON.parse(e.data);
+      if (firstMsg) { firstMsg = false; beacon('sse-first', { cur: (m.cur || '').slice(0, 8) }); }
       const at = m.ts != null ? m.ts : performance.now();   // 舊主機沒戳就退回到達時間
       if (m.ts != null) {
         const off = performance.now() - m.ts;
