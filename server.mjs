@@ -373,7 +373,7 @@ const handler = async (req, res) => {
       const q = (u.searchParams.get('q') || '').trim();
       if (!isFinite(lat) || !isFinite(lng) || !q) return json(res, { error: '要 ll 和 q' }, 400);
       try {
-        const vb = 0.03;
+        const vb = 0.09;   // ~10 公里:「跑到」是目的地指令,全城尺度
         const toRad = x => x * Math.PI / 180;
         const dOf = r2 => {
           const dp = toRad(+r2.lat - lat), dl = toRad(+r2.lon - lng);
