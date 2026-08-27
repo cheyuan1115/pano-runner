@@ -933,7 +933,21 @@ async function stepOnce() {
     // 不要馬上判定「沒路可走」
     for (let i = 0; i < 60 && !queue.length && S.running; i++) await sleep(100);
   }
-  if (!queue.length) { S.note = '⚠ 沒路可走了'; S.running = false; return; }
+  if (!queue.length) {
+    // 沒路可走不要直接停 —— 跳到附近可走的路上繼續(實際反饋:
+    // 起跑點吸進店家的室內全景,連結是死的,整趟卡死在拉麵店裡)。
+    // escapeIndoor 本來就是「用座標找附近地面」的逃生梯,借來用;
+    // 連逃生都失敗才真的停。
+    if (!S.escaped2) {
+      S.escaped2 = true;                 // 一步只試一次,防無限迴圈
+      S.note = T('🪂 沒路了,跳到附近的路上…', '🪂 Dead end — hopping to a nearby street…');
+      draw();
+      if (await escapeIndoor(S.cur.meta)) { S.escaped2 = false; return; }
+    }
+    S.note = T('⚠ 沒路可走了', '⚠ Dead end — no way out'); S.running = false;
+    S.escaped2 = false;
+    return;
+  }
   const { link, P, done } = queue.shift();
   const t0 = performance.now();
   const ok = await done;                       // 預抓成功的話這裡幾乎不等
