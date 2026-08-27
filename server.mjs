@@ -55,6 +55,10 @@ function lanIP() {
     for (const i of l || []) if (i.family === 'IPv4' && !i.internal) return i.address;
   return 'localhost';
 }
+// 個人伺服器不該因為一個沒接住的錯就整個死掉(實測:塔林搜尋時
+// 整個 process 無聲死亡,日誌零線索)。留下遺言、繼續活著。
+process.on('unhandledRejection', e => console.log('未接住的 rejection:', e?.stack || e));
+process.on('uncaughtException', e => console.log('未接住的例外:', e?.stack || e));
 const xlMem = new Map();   // 地名翻譯快取:星巴克→Starbucks
 
 // ── QZ(qdomyos-zwift)整合:社群 issue #1 ──────────────────
@@ -268,9 +272,21 @@ const handler = async (req, res) => {
       // 地圖上這一帶沒有人工景點時，補上維基的（只查中心那一格，
       // 整個 bbox 逐格查會打爆維基）
       if (hit.length < 3 && u.searchParams.get('wiki') !== '0') {
-        const w = await wikiCell((s0 + n0) / 2, (w0 + e0) / 2, true);
-        for (const x of w)
-          if (x.lat >= s0 && x.lat <= n0 && x.lng >= w0 && x.lng <= e0) hit.push(x);
+        // 合併中心 3×3 格(搜尋後 warmSpots 已在背景暖這幾格):
+        // 中心格等它抓完,鄰格只拿現成快取(沒有就背景補,下次重撈就有)——
+        // 只合中心一格的話,暖好的周圍景點永遠上不了地圖(實測里加 22→9)
+        const cLat = (s0 + n0) / 2, cLng = (w0 + e0) / 2, step = 1 / 90;
+        const seen = new Set(hit.map(x => x.id));
+        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+          // 一律不等(wait=false):維基抓取有全域節流,9 格排隊幾十秒,
+          // 等中心格會把整個請求卡到逾時(實測波爾多 60 秒沒回)。
+          // 沒現貨就回空+背景抓,客戶端的輪詢會一直重撈,好一格浮一格。
+          const w = await wikiCell(cLat + i * step, cLng + j * step, false);
+          for (const x of w)
+            if (!seen.has(x.id) && x.lat >= s0 && x.lat <= n0 && x.lng >= w0 && x.lng <= e0) {
+              seen.add(x.id); hit.push(x);
+            }
+        }
       }
       return json(res, { n: hit.length, items: hit.slice(0, 400) });
     }

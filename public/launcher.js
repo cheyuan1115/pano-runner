@@ -307,6 +307,19 @@ const say = () => {
 };
 
 // ── 搜尋 ──
+// 搜尋後主動暖景點:請伺服器抓中心 3×3 格(約 2.4 公里見方)的維基景點。
+// 新城市要現場跟維基要,幾秒到幾十秒才陸續回來 —— 期間每隔幾秒重撈重畫,
+// 橘點到了就自己浮出來,不用使用者晃地圖(實際反饋:搜尋完是空地圖)。
+let warmSeq = 0;
+async function warmSpots(lat, lng) {
+  const seq = ++warmSeq;
+  fetch(`/api/wikiwarm?ll=${lat},${lng}`).catch(() => {});
+  for (const d of [2500, 4000, 6000, 8000, 10000, 15000, 20000]) {
+    await new Promise(r => setTimeout(r, d));
+    if (seq !== warmSeq) return;             // 使用者又搜了別的地方
+    loadLandmarks();
+  }
+}
 async function search() {
   const q = el('q').value.trim();
   if (!q) return;
@@ -319,6 +332,7 @@ async function search() {
     V.lat = +j[0].lat; V.lng = +j[0].lon; V.z = 16;
     pts = []; shown = null;
     drawMap(); say();
+    warmSpots(V.lat, V.lng);   // 主動把這一帶的景點標出來
   } catch { el('step').textContent = '搜尋失敗。'; }
 }
 el('go').onclick = search;
