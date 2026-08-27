@@ -13,7 +13,7 @@ import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findPano, panoMeta } from './pano.mjs';
-import { wikiNearby, citySpots } from './wiki.mjs';
+import { moreImages, wikiNearby, citySpots } from './wiki.mjs';
 
 // 景點資料沿用 run-world 那份（745 個，12 個城市，含導覽稿）。
 // 直接讀原檔而不是複製一份 —— 那邊修了座標這邊立刻同步。
@@ -119,6 +119,27 @@ try { qzSock.bind(Number(process.env.PANO_QZ_PORT) || 9005); } catch {}
 // 「三台電腦各顯示一片」用的,區網延遲個位數毫秒。
 // 城市級景點快取:key = 約 5.5 公里網格。記憶體+磁碟(30 天),
 // busy 去重(同城市併發只查一次)。
+// ── 指名介紹的照片:維基查不到(店家)就問 Google Places ──
+// 金鑰只留伺服器:客戶端拿到的是 /pphoto?n=<photo資源名>,由這裡代取。
+// Places API(New):searchText 找店 → photos[].name → media 端點取圖。
+const pphotoCache = new Map();
+async function placesPhotos(query, lat, lng) {
+  let key;
+  try { key = (await readFile(join(process.env.HOME, '.keys', 'mapskey'), 'utf8')).trim(); }
+  catch { return []; }
+  const r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': 'places.displayName,places.photos,places.location' },
+    body: JSON.stringify({ textQuery: query, languageCode: 'zh-TW', pageSize: 1,
+      locationBias: { circle: { center: { latitude: lat, longitude: lng }, radius: 10000 } } }),
+    signal: AbortSignal.timeout(8000) });
+  const j = await r.json();
+  if (j.error) { console.log('Places:', j.error.status || j.error.message); return []; }
+  const ph = j.places?.[0]?.photos || [];
+  console.log(`Places「${query}」→ ${j.places?.[0]?.displayName?.text || '無'},照片 ${ph.length} 張`);
+  return ph.slice(0, 5).map(p2 => '/pphoto?n=' + encodeURIComponent(p2.name));
+}
 const cityMem = new Map();
 const cityBusy = new Map();
 const cityKey = (lat, lng) => `city_${Math.round(lat * 20)}_${Math.round(lng * 20)}`;
@@ -707,9 +728,18 @@ ${facts}
           ] }],
           generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
         }, 25000, t => guideOk(t, q2.lang));
+        // 照片瀑布與生稿「並行」:維基(地標)→ Places(店家)→ 空(寧缺勿錯)
+        const photoJob = (async () => {
+          try {
+            const m2 = await moreImages([subj], 5);
+            const w = (m2.get(subj) || []).map(u2 => '/photo?u=' + encodeURIComponent(u2));
+            if (w.length) return w;
+          } catch {}
+          try { return await placesPhotos(subj, q2.lat, q2.lng); } catch { return []; }
+        })();
         if (!out2) return json(res, { error: '今天的 AI 額度用完了(每模型每天 20 次,已全輪過)' }, 502);
         const clean2 = out2.text.replace(/[（(]\d+[)）]\s*/g, '').replace(/\s{2,}/g, ' ').trim();
-        return json(res, { text: clean2 });
+        return json(res, { text: clean2, photos: await photoJob.catch(() => []) });
       }
       const prompt = q2.lang === 'en' ? `You are a knowledgeable tour guide. The attached photo is the visitor's current street view.
 Write a 80-120 word spoken introduction, concise but substantive — every sentence should carry a fact: history, origins, purpose, what an architectural feature means, how this area fits the city.
@@ -767,6 +797,24 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
     }
     // 預熱：把一個點周圍九格的維基景點先抓好，跑步時就不會有空窗。
     // 搜尋城市後的「整城景點」:單一 SPARQL(半徑 7km、上限 200)
+    // Places 照片代取(含磁碟快取,同一張不重抓)
+    if (u.pathname === '/pphoto') {
+      const n = u.searchParams.get('n') || '';
+      if (!/^places\/[\w-]+\/photos\/[\w-]+$/.test(n)) return json(res, { error: '格式' }, 400);
+      const f = join(PHOTO_DIR, 'places_' + n.replace(/\//g, '_') + '.jpg');
+      const send = b2 => { res.writeHead(200, { 'content-type': 'image/jpeg',
+        'cache-control': 'max-age=2592000' }); res.end(b2); };
+      try { return send(await readFile(f)); } catch {}
+      try {
+        const key = (await readFile(join(process.env.HOME, '.keys', 'mapskey'), 'utf8')).trim();
+        const r = await fetch(`https://places.googleapis.com/v1/${n}/media?maxWidthPx=1200&key=${key}`,
+          { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+        if (!r.ok) return json(res, { error: 'places ' + r.status }, 502);
+        const b2 = Buffer.from(await r.arrayBuffer());
+        await writeFile(f, b2).catch(() => {});
+        return send(b2);
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+    }
     if (u.pathname === '/api/citywarm') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
       if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);

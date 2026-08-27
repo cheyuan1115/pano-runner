@@ -2024,7 +2024,8 @@ async function aiGuide(subject = null) {
       const lines = (j.text.match(EN_UI ? /[^。！？.!?]+[。！？.!?]?/g : /[^。！？!?]+[。！？!?]?/g) || [j.text])
         .map(t => t.trim()).filter(t => t.length > 1);
       const lm = { id: 'ai:' + Date.now(), name: T('AI 導覽', 'AI Guide'), lat: m.lat, lng: m.lng,
-                   script: j.text, lines, marks: [], photos: [], audio: '' };
+                   script: j.text, lines, marks: [],
+                   photos: j.photos || [], audio: '' };   // 指名介紹會帶維基/Places 查到的照片
       await ttsFor(lm).catch(() => {});
       return { j, lm };
     })();
