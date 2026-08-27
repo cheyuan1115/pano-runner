@@ -269,7 +269,21 @@ const PLACE_QIDS = [
   'Q133311',  // 陵墓
   'Q570116',  // 觀光景點
   'Q839954',  // 考古遺址
-  'Q2087181', // 歷史建築
+  // ── 自然與郊區系(皇后鎮實測:整城都是這些,原清單全對不上)──
+  'Q35112127',// historic building(跟 Q2087181 是不同編號,NZ 常用這個)
+  'Q8502',    // 山
+  'Q54050',   // 丘陵
+  'Q207326',  // 山峰
+  'Q34038',   // 瀑布
+  'Q23397',   // 湖
+  'Q40080',   // 海灘
+  'Q167346',  // 植物園
+  'Q43501',   // 動物園
+  'Q1107656', // 庭園
+  'Q794867',  // 觀景台
+  'Q2319498', // 地標
+  'Q1576213', // 纜車
+  'Q179700',  // 雕像
 ].map(q => 'wd:' + q).join(' ');
 
 async function sparqlSpots(lat, lng, km, limit = 80) {
@@ -414,11 +428,48 @@ const sentences = t => (t.match(/[^。！？!?]+[。！？!?]?/g) || []).map(s =
 // 只回地圖需要的最小欄位;導覽稿與照片等真的跑到那附近時
 // 由既有的逐格管線補。
 export async function citySpots(lat, lng) {
-  const rows = await sparqlSpots(lat, lng, 7, 200);
-  return rows
-    .filter(c => c.links >= 3)
-    .map(c => ({ id: 'c:' + c.zh, name: c.zh, lat: c.lat, lng: c.lng,
-                 cat: 'see', links: c.links }));
+  // 名字寬容降級:繁中條目名 > 中文標籤 > 英文標籤。
+  // 只要求繁中的話,中文圈外整片空白(實測皇后鎮 7km:任何語言 81 個、
+  // 繁中只有 3 個)。英文名的景點照樣能標點、能「跑到」,
+  // 到了現場交給 AI 導覽(它認得英文名)。
+  const q = `SELECT ?zhArt ?zhL ?enL ?lat ?lon (COUNT(DISTINCT ?site) AS ?links) WHERE {
+  SERVICE wikibase:around {
+    ?item wdt:P625 ?coord .
+    bd:serviceParam wikibase:center "Point(${lng} ${lat})"^^geo:wktLiteral .
+    bd:serviceParam wikibase:radius "7" .
+  }
+  ?item wdt:P31 ?type . VALUES ?type { ${PLACE_QIDS} }
+  ?site schema:about ?item .
+  OPTIONAL { ?art schema:about ?item ; schema:isPartOf <https://zh.wikipedia.org/> ; schema:name ?zhArt }
+  OPTIONAL { ?item rdfs:label ?zhL . FILTER(LANG(?zhL) = "zh") }
+  OPTIONAL { ?item rdfs:label ?enL . FILTER(LANG(?enL) = "en") }
+  ?item p:P625/psv:P625 ?cv . ?cv wikibase:geoLatitude ?lat ; wikibase:geoLongitude ?lon .
+} GROUP BY ?zhArt ?zhL ?enL ?lat ?lon ORDER BY DESC(?links) LIMIT 200`;
+  let r = null;
+  for (let i = 0; i < 3; i++) {
+    r = await fetch('https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(q),
+      { headers: { 'User-Agent': UA, Accept: 'application/sparql-results+json' },
+        signal: AbortSignal.timeout(60000) });
+    if (r.ok) break;
+    if (i < 2) await nap(8000 * (i + 1));
+  }
+  if (!r.ok) throw new Error('SPARQL HTTP ' + r.status);
+  const seen = new Map();
+  for (const b of (await r.json()).results.bindings) {
+    const name = b.zhArt?.value || b.zhL?.value || b.enL?.value;
+    if (!name || seen.has(name)) continue;
+    const links = +b.links.value;
+    // 知名度門檻:有繁中條目≥3 語言版;沒有的≥2(≥5 的話中文圈外
+    // 整片又空了 —— 紐西蘭的景點大多只有 1~2 個語言版,實測皇后鎮
+    // 只剩 2 個)。≥2 = 至少「英文+另一語言」,雜點還能接受
+    // 類型白名單本身就是品質濾網(能通過的都是「景點類」),
+    // 語言版本數只用來排序,不再當門檻 —— 皇后鎮實測:≥2 剩 7 個,
+    // 全放行 = 把 81 個裡型別對的都撈進來,小鎮才有東西看
+    if (b.zhArt && links < 3) continue;
+    seen.set(name, { id: 'c:' + name, name, lat: +b.lat.value, lng: +b.lon.value,
+                     cat: 'see', links });
+  }
+  return [...seen.values()];
 }
 
 export async function wikiNearby(lat, lng, {
