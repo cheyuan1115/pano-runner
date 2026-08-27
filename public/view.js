@@ -47,6 +47,10 @@ void main() { vUV = aPos; gl_Position = vec4(aPos, 0.0, 1.0); }`;
 const FRAG_PREC = (gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT)?.precision > 0)
   ? 'highp' : 'mediump';
 if (FRAG_PREC !== 'highp') beacon('mediump-fallback');
+// 輕量模式:GPU 連 highp 都沒有的裝置(老電視/廉價平板),記憶體和
+// 填充率一定也弱 —— 自動降規換穩定:渲染解析度封頂 720p、
+// 圖磚最高 zoom 3、全景快取砍半。畫質換「不 lag、不被系統殺掉」。
+const LITE = FRAG_PREC !== 'highp';
 const FS = `
 precision ${FRAG_PREC} float;
 varying vec2 vUV;
@@ -582,7 +586,8 @@ const HYB_TC = rad(48), HYB_TAN = Math.tan(HYB_TC), HYB_SEC2 = 1 / Math.cos(HYB_
 const hybX = a => a <= HYB_TC ? Math.tan(a) : HYB_TAN + (a - HYB_TC) * HYB_SEC2;
 function drawInner() {
   if (xr.session) return;               // VR 進行中由 xrFrame 畫
-  const dpr = Math.min(2, devicePixelRatio || 1);
+  const dpr = LITE ? Math.min(1, 1280 / (cv.clientWidth || 1280))
+                   : Math.min(2, devicePixelRatio || 1);
   const w = Math.round(cv.clientWidth * dpr), h = Math.round(cv.clientHeight * dpr);
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   gl.clearColor(0.05, 0.055, 0.065, 1);
@@ -1169,7 +1174,7 @@ async function followPano(id, head) {
     P.ready = load(P, id, head);
     await P.ready;
     // 只留最近幾顆，免得貼圖把記憶體吃光
-    while (followCache.size > 8) {
+    while (followCache.size > (LITE ? 3 : 8)) {
       const k = followCache.keys().next().value;
       const old = followCache.get(k);
       if (old !== S.cur && old !== S.nxt) {
@@ -3005,6 +3010,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.has('span')) S.span = +q.get('span');
   if (q.has('fov')) S.fov = +q.get('fov');
   if (q.has('zoom')) S.zoom = +q.get('zoom');
+  if (LITE) S.zoom = Math.min(S.zoom, 3);   // 輕量裝置貼圖上限 zoom 3
   if (q.has('kmh')) { S.kmh = +q.get('kmh'); S.kmhCap = S.kmh; }
   if (q.get('mic') === '1') S.mic = true;
   if (q.get('voice') === '1') S.voice = true;
