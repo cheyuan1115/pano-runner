@@ -1962,10 +1962,13 @@ async function rewindFor(pending) {
     fillQueue();
   } finally { S.hold = false; }
 }
-async function aiGuide() {
+async function aiGuide(subject = null) {
   if (AIG.busy || S.speaking || !S.cur?.meta) return;
   AIG.busy = true;
-  S.note = T('🤖 AI 看了一眼，正在想怎麼介紹…', '🤖 AI is looking around, composing an intro…'); draw();
+  S.note = subject
+    ? T(`🤖 AI 正在準備「${subject}」的介紹…`, `🤖 AI is preparing an intro of "${subject}"…`)
+    : T('🤖 AI 看了一眼，正在想怎麼介紹…', '🤖 AI is looking around, composing an intro…');
+  draw();
   try {
     // 抓正前方畫面:先畫一幀,縮到 768 寬(Gemini 不需要更大)
     draw();
@@ -1984,7 +1987,7 @@ async function aiGuide() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lat: m.lat, lng: m.lng, heading: S.heading,
           date: m.date || null, nearby, img, recent: AIG.recent,
-          lang: EN_UI ? 'en' : 'zh' }),
+          subject, lang: EN_UI ? 'en' : 'zh' }),
         // 60 秒:伺服器端會在多款模型間輪備援(額度 429 就換下一款),整串可能很久
         signal: AbortSignal.timeout(60000) });
       const j = await r.json();
@@ -2672,6 +2675,15 @@ window.__turn = (cmd, text) => {
     return;
   }
   if (cmd === 'aiguide') { aiGuide(); return; }   // 「介紹」= 永遠問 AI
+  if (cmd === 'aiabout') {                          // 「介紹○○」= 指名介紹
+    const xe = (text || '').toLowerCase().replace(/[。，、！？.,!?]/g, '').replace(/\s+/g, ' ').trim();
+    const me = xe.match(/^(describe|tell me about|what is) (.+)$/);
+    const mz = (text || '').replace(/[\s。，、！？.,!?]/g, '')
+      .replace(/^(小跑|跑步|嘿小跑)/, '').replace(/(吧|喔|囉|啦)$/, '').match(/^介紹(.+)$/);
+    const subject = me ? me[2] : mz ? mz[1] : '';
+    if (subject) aiGuide(subject);
+    return;
+  }
   if (cmd === 'goto') { gotoLm(text); return; }    // 「跑到○○」= 找景點跑過去
   if (cmd === 'stop') { finishRun(text); return; }
   S.turnSeq++;

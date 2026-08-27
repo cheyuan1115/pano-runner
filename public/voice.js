@@ -73,6 +73,7 @@
         .replace(/\s+/g, ' ').trim();
       for (const [cmd, list] of Object.entries(WORDS_EN)) if (list.includes(x2)) return cmd;
       if (/^(run to|go to|take me to) .{2,40}$/.test(x2)) return 'goto';
+      if (/^(describe|tell me about|what is) .{2,40}$/.test(x2)) return 'aiabout';
       return null;
     }
     let x = (t || '').replace(/[\s。，、！？.,!?]/g, '');
@@ -82,6 +83,9 @@
     // 「跑到凱旋門」「前往鐵塔」—— 名字部分在 view.js 的 gotoLm 再解一次。
     // 名字限 2~8 字:單字太容易誤觸,超長的是一般聊天。
     if (/^(跑到|跑去|前往).{2,8}$/.test(x)) return 'goto';
+    // 「介紹雷門」—— 指名要 AI 介紹某個景點(單獨的「介紹」在上面的
+    // 完全比對就處理掉了,走到這裡一定有接名字)
+    if (/^介紹.{2,10}$/.test(x)) return 'aiabout';
     return null;
   };
 

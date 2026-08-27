@@ -684,6 +684,33 @@ const handler = async (req, res) => {
         (q2.nearby || []).length
           ? '附近的已知景點:' + q2.nearby.map(n => `${n.name}(${Math.round(n.d)}公尺)`).join('、') : '',
       ].filter(Boolean).join('\n');
+      const subj = (q2.subject || '').slice(0, 40).trim();
+      if (subj) {
+        // 指名介紹:主角優先用 AI 自身知識,畫面只是現場氛圍的輔助 ——
+        // 主角很可能根本不在畫面裡(隔著一條河聽東京鐵塔),
+        // 所以防瞎說的重點從「不准命名」轉成「不確定的事不要編年份數字」
+        const prompt2 = q2.lang === 'en'
+          ? `You are a knowledgeable tour guide. The visitor asked specifically about: "${subj}".
+Give an 80-140 word spoken introduction of it — history, origin, purpose, significance, one or two vivid facts. Use your own knowledge of this landmark.
+Context (where the visitor is standing now — mention it only if relevant):
+${facts}
+Rules: don't invent specific dates/numbers you're unsure of; no filler-mood sentences; no mentions of running or exercise; don't open with "this photo"; speak as a guide standing beside the visitor.`
+          : `你是知識型導遊。訪客指名想聽「${subj}」的介紹。
+用繁體中文(台灣用語)講一段 100 到 160 字的介紹:它的歷史、由來、用途、地位,加一兩個生動的知識點。用你自己對這個景點的知識來講。
+訪客目前所在位置(有關聯才提,沒關聯不用硬扯):
+${facts}
+規則:不確定的年份數字不要編;禁止零資訊的氛圍句;不提跑步運動;不要「這張照片」開頭;像站在訪客身邊的導遊那樣說。`;
+        const out2 = await genAI(AI_VISION, {
+          contents: [{ parts: [
+            { text: prompt2 },
+            { inline_data: { mime_type: 'image/jpeg', data: q2.img } },
+          ] }],
+          generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
+        }, 25000, t => guideOk(t, q2.lang));
+        if (!out2) return json(res, { error: '今天的 AI 額度用完了(每模型每天 20 次,已全輪過)' }, 502);
+        const clean2 = out2.text.replace(/[（(]\d+[)）]\s*/g, '').replace(/\s{2,}/g, ' ').trim();
+        return json(res, { text: clean2 });
+      }
       const prompt = q2.lang === 'en' ? `You are a knowledgeable tour guide. The attached photo is the visitor's current street view.
 Write a 80-120 word spoken introduction, concise but substantive — every sentence should carry a fact: history, origins, purpose, what an architectural feature means, how this area fits the city.
 No filler-mood sentences ("adds a touch of elegance" etc). No mentions of running or exercise, no pep talk, no questions.
