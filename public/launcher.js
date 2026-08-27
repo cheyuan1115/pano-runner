@@ -1,7 +1,7 @@
 // 啟動器：在地圖上點起跑點與朝向，設速度，然後跳到 run.html。
 //
 // 自己寫一個很小的滑動地圖，不引外部函式庫 —— 只需要 Web Mercator 換算加上
-// 一層 <img> 磚塊。底圖用 CARTO 的 voyager（免金鑰，要標示出處）。
+// 一層 <img> 磚塊。底圖走自家 /maptile 代理(OSM 磚+本機快取)。
 //
 // 按「開始跑」之前會先問 /api/find：點的地方沒有街景就當場說，
 // 不要讓使用者跳過去才看到一片黑。
@@ -82,7 +82,8 @@ function drawMap() {
     if (!img) {
       img = new Image();
       img.className = 'tile';
-      img.src = `https://basemaps.cartocdn.com/rastertiles/voyager/${V.z}/${tx}/${y}.png`;
+      // 改走自家 /maptile 代理:CARTO 斷供後換 OSM,順便吃到本機快取
+      img.src = `/maptile?z=${V.z}&x=${tx}&y=${y}`;
       cache.set(key, img);
       map.appendChild(img);
     }

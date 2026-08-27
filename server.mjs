@@ -539,8 +539,13 @@ const handler = async (req, res) => {
       };
       try { return send(await readFile(f)); } catch {}
       try {
-        const r = await fetch(`https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,
-          { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15000) });
+        // CARTO 2026/8 開始強制 API 金鑰(磚上直接印 API KEY REQUIRED,實測),
+        // 換 OSM 官方磚:免金鑰,搭配本機快取+正經 UA,對他們負擔很小
+        // OSM 政策:要「自報家門」的 UA,假冒瀏覽器反而進黑名單(實測 403)
+        const r = await fetch(`https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+          { headers: { 'User-Agent':
+              `pano-runner/1.0 (+https://github.com/cheyuan1115/pano-runner; contact: ${process.env.PANO_CONTACT || 'see-repo'})` },
+            signal: AbortSignal.timeout(15000) });
         if (!r.ok) return json(res, { error: '抓不到磚塊 ' + r.status }, 502);
         const b = Buffer.from(await r.arrayBuffer());
         await mkdir(MAP_DIR, { recursive: true });

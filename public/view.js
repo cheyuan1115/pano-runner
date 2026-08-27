@@ -2261,9 +2261,9 @@ function updateAttr() {
   const d = S.cur?.meta?.date;
   el.textContent = EN_UI
     ? 'Imagery © Google Street View' + (d ? ` (captured ${d[1]}/${d[0]})` : '')
-      + '   Map © OpenStreetMap / CARTO'
+      + '   Map © OpenStreetMap'
     : '影像 © Google 街景服務' + (d ? `（${d[0]} 年 ${d[1]} 月拍攝）` : '')
-      + '　地圖 © OpenStreetMap／CARTO';
+      + '　地圖 © OpenStreetMap';
 }
 
 // ── 左下角小地圖 ──────────────────────────────────────────────
