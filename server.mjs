@@ -186,9 +186,17 @@ async function genAI(models, body, timeoutMs = 20000, ok = null) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(timeoutMs), body: JSON.stringify(body) })).json();
       if (g.error) { console.log(`AI ${mdl}:${g.error.code}`); continue; }
-      const text = (g.candidates?.[0]?.content?.parts || [])
+      let text = (g.candidates?.[0]?.content?.parts || [])
         .filter(p2 => !p2.thought).map(p2 => p2.text || '').join('').trim();
       if (!text) { console.log(`AI ${mdl}:空稿`); continue; }
+      // 輸出額度被思考吃光時稿子會腰斬在半句(實測:22 秒音檔停在
+      // 「改建自19世紀的織物商」)—— 退到最後一個完整句,太短就換下一款
+      if (g.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+        const cut = text.replace(/[^。！？.!?]*$/, '');
+        if (cut.length < 60) { console.log(`AI ${mdl}:MAX_TOKENS 且太短`); continue; }
+        console.log(`AI ${mdl}:MAX_TOKENS,截到最後完整句`);
+        text = cut;
+      }
       if (ok && !ok(text)) { console.log(`AI ${mdl}:稿不合格 ${text.slice(0, 60)}`); continue; }
       return { text, model: mdl };
     } catch (e) { console.log(`AI ${mdl}:` + (e.message || e)); }
@@ -726,7 +734,7 @@ ${facts}
             { text: prompt2 },
             { inline_data: { mime_type: 'image/jpeg', data: q2.img } },
           ] }],
-          generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
+          generationConfig: { temperature: 0.6, maxOutputTokens: 4096 },
         }, 25000, t => guideOk(t, q2.lang));
         // 照片瀑布與生稿「並行」:維基(地標)→ Places(店家)→ 空(寧缺勿錯)
         const photoJob = (async () => {
@@ -775,7 +783,7 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
           { text: prompt },
           { inline_data: { mime_type: 'image/jpeg', data: q2.img } },
         ] }],
-        generationConfig: { temperature: 0.6, maxOutputTokens: 2048 },
+        generationConfig: { temperature: 0.6, maxOutputTokens: 4096 },
       }, 25000, t => guideOk(t, q2.lang));
       if (!out) return json(res, { error: '今天的 AI 額度用完了(每模型每天 20 次,已全輪過)' }, 502);
       // 最後保險:就算通過驗收,殘餘的編號雜訊也清掉
