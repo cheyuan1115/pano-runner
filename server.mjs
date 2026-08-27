@@ -571,6 +571,8 @@ const handler = async (req, res) => {
         // CARTO 2026/8 開始強制 API 金鑰(磚上直接印 API KEY REQUIRED,實測),
         // 換 OSM 官方磚:免金鑰,搭配本機快取+正經 UA,對他們負擔很小
         // OSM 政策:要「自報家門」的 UA,假冒瀏覽器反而進黑名單(實測 403)
+        // 磚用官方的(法國社群的 HOT 淡色款實測連不上,志工伺服器不穩);
+        // 「太花」的問題改在畫的那端用去飽和濾鏡解決
         const r = await fetch(`https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
           { headers: { 'User-Agent':
               `pano-runner/1.0 (+https://github.com/cheyuan1115/pano-runner; contact: ${process.env.PANO_CONTACT || 'see-repo'})` },

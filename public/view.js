@@ -2343,7 +2343,11 @@ function drawMini() {
         if (MM.tiles.size > 120) MM.tiles.delete(MM.tiles.keys().next().value);
       }
       if (img.complete && img.naturalWidth)
+        // 去飽和+提亮:OSM 官方磚顏色太花,塞 240px 小地圖太擁擠
+        //(斷供前的 CARTO 是淡色款)。濾鏡只影響磚,上面的線與標記照舊鮮明
+        g.filter = 'saturate(0.35) brightness(1.06)';
         g.drawImage(img, tx * TS - left, ty * TS - top, TS, TS);
+        g.filter = 'none';
     }
 
   // 走過的路線。只畫最近兩百點，整趟畫下來在 240 像素裡也看不出東西。
