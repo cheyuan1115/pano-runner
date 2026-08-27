@@ -82,10 +82,12 @@
     for (const [cmd, list] of Object.entries(WORDS)) if (list.includes(x)) return cmd;
     // 「跑到凱旋門」「前往鐵塔」—— 名字部分在 view.js 的 gotoLm 再解一次。
     // 名字限 2~8 字:單字太容易誤觸,超長的是一般聊天。
-    if (/^(跑到|跑去|前往).{2,8}$/.test(x)) return 'goto';
+    if (/^(跑到|跑去|前往).{2,20}$/.test(x)) return 'goto';
     // 「介紹雷門」—— 指名要 AI 介紹某個景點(單獨的「介紹」在上面的
     // 完全比對就處理掉了,走到這裡一定有接名字)
-    if (/^介紹.{2,10}$/.test(x)) return 'aiabout';
+    // 名字放寬到 20 字:辨識器常把品牌轉成英文(星巴克→Starbucks),
+    // 10 字上限會讓「介紹皇后鎮Starbucks」整句對不上
+    if (/^介紹.{2,20}$/.test(x)) return 'aiabout';
     return null;
   };
 
@@ -118,27 +120,46 @@
   // 會先送出「介紹」(中途結果)→ 立刻觸發看畫面版;完整句到齊時指名版
   // 已被 busy 擋掉(實際反饋)。解法:單獨「介紹」憋 900ms 再執行,
   // 期間出現「介紹+名字」就取消原版、改跑指名版。
-  let pendGuide = null;
+  // 累積型指令(介紹/介紹○○/跑到○○)的搶跑問題:辨識逐字吐,
+  // 「介紹巴黎聖母院」會先送「介紹」→「介紹巴黎」→ 完整句 ——
+  // 前段都會命中並開槍,真正想要的最後版反被 busy 擋掉
+  // (日誌實錘:aiabout「介紹巴黎」先開,人在巴黎聽起來就像在介紹原地)。
+  // 解法:這三種指令每次更新就重置 1 秒計時,辨識穩定才執行最後版本。
+  // 轉向等單發指令維持即時(慢 1 秒會錯過路口)。
+  let pendT = null, pendCmd = null, pendText = null, doneKey = '', doneAt = 0;
   const fire = (cmd, text) => {
     // 播報導覽的時候，麥克風收到的是自己的喇叭聲。旁白裡出現「介紹」「右」
     // 這種字很常見，照收的話會被自己的旁白指揮。
-    // （view.js 一直有設 window.__speaking，但先前沒有任何地方讀它，
-    //   等於這道防護從來沒生效過。）
     if (window.__speaking) { V.selfHeard = (V.selfHeard || 0) + 1; return; }
-    // 同一個指令兩秒內只算一次 —— interim 會把同一句重送很多遍
-    if (cmd === lastCmd && Date.now() - lastAt < 2000) return;
-    lastCmd = cmd; lastAt = Date.now();
-    V.heard++;
-    const go = () => {
+    const settle = cmd === 'aiguide' || cmd === 'aiabout' || cmd === 'goto';
+    if (!settle) {
+      // 同一個指令兩秒內只算一次 —— interim 會把同一句重送很多遍
+      if (cmd === lastCmd && Date.now() - lastAt < 2000) return;
+      lastCmd = cmd; lastAt = Date.now();
+      V.heard++;
+      vlog('指令', { cmd, text: (text || '').slice(0, 40) });
       if (typeof window.__turn === 'function') {
         // 這裡丟例外的話 onresult 會中斷，後面的句子就都收不到了
         try { window.__turn(cmd, text); }
         catch (e) { V.error = 'turn:' + (e && e.message || e); }
       }
-    };
-    if (cmd === 'aiguide') { clearTimeout(pendGuide); pendGuide = setTimeout(go, 900); return; }
-    if (cmd === 'aiabout') { clearTimeout(pendGuide); pendGuide = null; }
-    go();
+      return;
+    }
+    pendCmd = cmd; pendText = text || '';
+    clearTimeout(pendT);
+    pendT = setTimeout(() => {
+      const key = pendCmd + '|' + pendText;
+      // final 常整句重送 —— 剛執行過一模一樣的就不要再來一次
+      if (key === doneKey && Date.now() - doneAt < 3000) { pendCmd = null; return; }
+      doneKey = key; doneAt = Date.now();
+      V.heard++;
+      vlog('指令', { cmd: pendCmd, text: pendText.slice(0, 40) });
+      if (typeof window.__turn === 'function') {
+        try { window.__turn(pendCmd, pendText); }
+        catch (e) { V.error = 'turn:' + (e && e.message || e); }
+      }
+      pendCmd = null;
+    }, 1000);
   };
 
   const build = myGen => {
