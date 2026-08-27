@@ -2743,6 +2743,15 @@ window.__turn = (cmd, text) => {
     return;
   }
   if (cmd === 'goto') { gotoLm(text); return; }    // 「跑到○○」= 找景點跑過去
+  if (cmd === 'gemini') {                           // 「呼叫AI」= Gemini Live 開關
+    S.note = T('✨ 呼叫 AI…', '✨ Summoning AI…'); draw();
+    fetch('/api/gemini').then(r => r.json()).then(j => {
+      S.note = j.action === 'closed' ? T('✨ AI 已關閉', '✨ AI dismissed')
+             : j.action === 'opened' ? T('✨ AI 上線,開聊吧', '✨ AI is live — talk away')
+             : '✨ ' + (j.error || '');
+    }).catch(() => {});
+    return;
+  }
   if (cmd === 'stop') { finishRun(text); return; }
   S.turnSeq++;
   if (cmd === 'back') {

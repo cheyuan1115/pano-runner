@@ -51,6 +51,11 @@
     // 「介紹」獨立成 AI 導覽:就算附近有內建景點的詢問框,
     // 說「介紹」也是問 AI 講眼前的東西,不會跑去景點導覽。
     aiguide: ['介紹', '要介紹', '街紹', '皆紹'],
+    // 叫出 Chrome 內建 Gemini(伺服器模擬 ^G)。辨識對英文字通常
+    // 直接給拉丁拼寫,大小寫都收
+    // 呼叫 Chrome 內建 Gemini。詞是「呼叫AI」(使用者指定);
+    // AI 兩字母辨識會出大小寫變體,同一句話全收
+    gemini: ['呼叫AI', '呼叫ai', '呼叫Ai', '呼叫A I', '呼叫a i'],
   };
   // 指令最長就這麼長。超過表示那是一般說話（或電視、旁人講話），
   // 不但不可能命中，還會把辨識段落一直佔住 —— 直接判定不是指令、當場重來。
@@ -62,6 +67,7 @@
     back:  ['turn around', 'u turn', 'u-turn', 'go back', 'turn back'],
     stop:  ['stop running', 'finish run', 'end run', 'im done', "i'm done"],
     guide: ['guide', 'tour', 'guide me', 'take the tour'],
+    gemini: ['gemini', 'hey gemini', 'ask gemini'],
     aiguide: ['describe', 'describe this', 'what is this', 'whats this',
               "what's this", 'tell me about this', 'introduce'],
   };

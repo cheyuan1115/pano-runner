@@ -825,6 +825,47 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
         return send(b2);
       } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
     }
+    // 語音「呼叫AI」→ Gemini Live 智慧開關。狀態靠系統視窗清單偵測:
+    // Live 的懸浮窗(Chrome、浮動層、約 350×120)存在=開著 → 點它的 ✕ 關;
+    // 不在 → ^G 開面板 + 1.3 秒後點輸入框右下的聲波鈕進語音模式。
+    // 懸浮窗會移動,座標一律即時查(CGWindowList),不寫死。
+    // 需要:同一台機器、輔助使用權限、cliclick、python3+pyobjc。
+    if (u.pathname === '/api/gemini') {
+      try {
+        const { execFile } = await import('node:child_process');
+        const run = (cmd, args) => new Promise((ok, no) =>
+          execFile(cmd, args, (e, out) => e ? no(e) : ok((out || '').trim())));
+        const PYFIND = `
+import Quartz
+wl = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
+for w in wl:
+    if 'Chrome' in w.get('kCGWindowOwnerName','') and w.get('kCGWindowLayer',0) > 0:
+        b = w['kCGWindowBounds']
+        if 250 < b['Width'] < 600 and 80 < b['Height'] < 300:
+            print(int(b['X'] + b['Width'] - 20), int(b['Y'] + 18)); break
+else: print('NONE')`;
+        const found = await run('python3', ['-c', PYFIND]);
+        if (found !== 'NONE') {
+          const [x, y] = found.split(' ');
+          await run('/opt/homebrew/bin/cliclick', ['c:' + x + ',' + y]);
+          return json(res, { ok: 1, action: 'closed' });
+        }
+        await run('osascript', ['-e', 'tell application "Google Chrome" to activate',
+          '-e', 'delay 0.3',
+          '-e', 'tell application "System Events" to keystroke "g" using control down']);
+        await new Promise(r2 => setTimeout(r2, 1300));
+        const xy = await run('osascript', ['-e', `
+          tell application "System Events" to tell process "Google Chrome"
+            set w to first window whose value of attribute "AXMain" is true
+            set p to value of attribute "AXPosition" of w
+            set sz to value of attribute "AXSize" of w
+            return ((item 1 of p) + (item 1 of sz) - 42 as string) & " " & ((item 2 of p) + (item 2 of sz) - 43 as string)
+          end tell`]);
+        const [x2, y2] = xy.split(' ');
+        await run('/opt/homebrew/bin/cliclick', ['c:' + x2 + ',' + y2]);
+        return json(res, { ok: 1, action: 'opened' });
+      } catch (e) { return json(res, { error: String(e.message || e) }, 500); }
+    }
     if (u.pathname === '/api/citywarm') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
       if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
