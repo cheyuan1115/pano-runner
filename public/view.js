@@ -2028,7 +2028,9 @@ async function aiGuide(subject = null) {
       await ttsFor(lm).catch(() => {});
       return { j, lm };
     })();
-    await rewindFor(req);
+    // 指名介紹不倒帶:倒帶是為了回到「你看到東西的位置」,
+    // 指名的主角跟腳下位置無關,邊跑邊等就好(實際反饋)
+    if (!subject) await rewindFor(req);
     const { j, lm } = await req;
     if (!j.text) { S.note = '🤖 ' + (j.error || 'AI 沒回應'); draw(); return; }
     window.__aigText = j.text;
