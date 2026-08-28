@@ -101,7 +101,7 @@
                                last: '', log: [], alive: 0, error: null };
   // 給測試與除錯用：直接餵一句話進來，走跟真的辨識完全相同的比對與觸發路徑。
   // 沒有這個就只能對著麥克風念，改一次詞表要重跑一次跑步機。
-  V.feed = t => { const c = parse(t); note(t, c); if (c) fire(c, t); return c; };
+  V.feed = t => { const c = parse(t); note(t, c); if (c) fire(c, t); else cancelIfLonger(t); return c; };
   let rec = null, gen = 0, starting = false, lastCmd = null, lastAt = 0;
 
   // 把事件送回伺服器。辨識這一段在開發機上重現不了（沒辦法對麥克風講話），
@@ -133,6 +133,20 @@
   // 解法:這三種指令每次更新就重置 1 秒計時,辨識穩定才執行最後版本。
   // 轉向等單發指令維持即時(慢 1 秒會錯過路口)。
   let pendT = null, pendCmd = null, pendText = null, doneKey = '', doneAt = 0;
+  // 排隊取消器:「介紹」先到排了隊,接著聽到「介紹xxx」(現在不匹配任何
+  // 指令)—— 那代表使用者說的是長句(可能在跟 Gemini 講話),
+  // 待命中的那發要收回(實際反饋:說介紹xxx 還是觸發了介紹)
+  const PEND_PREFIX = { aiguide: ['介紹'], goto: ['跑到', '跑去', '前往'] };
+  const cancelIfLonger = t => {
+    if (!pendCmd) return;
+    const x = (t || '').replace(/[\s。，、！？.,!?]/g, '');
+    const pre = PEND_PREFIX[pendCmd] || [];
+    for (const p2 of pre)
+      if (x.startsWith(p2) && x.length > p2.length) {
+        clearTimeout(pendT); pendCmd = null;
+        return;
+      }
+  };
   const fire = (cmd, text) => {
     // 播報導覽的時候，麥克風收到的是自己的喇叭聲。旁白裡出現「介紹」「右」
     // 這種字很常見，照收的話會被自己的旁白指揮。
@@ -222,6 +236,7 @@
         // 只記 final，interim 會把同一句重送十幾次，記了看不出東西
         if (res.isFinal) { note(shown, hit); vlog('聽到', { text: shown, cmd: hit }); }
         if (hit) fire(hit, shown);
+        else cancelIfLonger(res[0].transcript);
       }
     };
     r.onend = () => {
