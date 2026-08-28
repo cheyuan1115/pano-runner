@@ -2752,7 +2752,7 @@ window.__turn = (cmd, text) => {
     const me = xe.match(/^(describe|tell me about|what is) (.+)$/);
     const mz = (text || '').replace(/[\s。，、！？.,!?]/g, '')
       .replace(/^(小跑|跑步|嘿小跑)/, '').replace(/(吧|喔|囉|啦)$/, '').match(/^介紹(.+)$/);
-    const subject = me ? me[2] : mz ? mz[1] : '';
+    const subject = (me ? me[2] : mz ? mz[1] : '').replace(/^一下/, '');
     // 泛指詞不當主角:「介紹這附近」其實是要看畫面介紹 ——
     // 拿「這附近」去搜 Places 會撈到不知哪裡的店(實測撈到台灣市場的照片)
     const generic = /^(這裡|這邊|這附近|這個|這一帶|附近|周圍|四周|眼前|前面|那個|那裡|here|this place|this area|around here)$/;
