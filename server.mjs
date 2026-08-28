@@ -879,6 +879,78 @@ else: print('NONE')`;
         return json(res, { ok: 1, action: 'opened' });
       } catch (e) { return json(res, { error: String(e.message || e) }, 500); }
     }
+    // AI 排路線(混合式):演算法圈候選+把關距離,Gemini 挑選排序+寫開場白。
+    // 環狀:終點回到起點。距離估算=相鄰直線和×1.3(繞路係數)。
+    if (u.pathname === '/api/planroute') {
+      const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
+      const km = Math.max(1, Math.min(20, Number(u.searchParams.get('km')) || 5));
+      const lang = u.searchParams.get('lang') === 'en' ? 'en' : 'zh';
+      if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);
+      const toRad = x => x * Math.PI / 180;
+      const dm = (a2, b2) => {
+        const dp = toRad(b2.lat - a2.lat), dl = toRad(b2.lng - a2.lng);
+        const h = Math.sin(dp / 2) ** 2 + Math.cos(toRad(a2.lat)) * Math.cos(toRad(b2.lat)) * Math.sin(dl / 2) ** 2;
+        return 2 * 6371000 * Math.asin(Math.sqrt(h));
+      };
+      try {
+        // 候選:人工景點+城市級快取,錨定在最熱門的景點周圍
+        const seen = new Map();
+        for (const l of LANDMARKS)
+          if (dm({ lat, lng }, l) < 8000) seen.set(l.name, { name: l.name, lat: l.lat, lng: l.lng, w: (l.len || 100) });
+        for (const x of await loadCity(lat, lng, true))
+          if (!seen.has(x.name)) seen.set(x.name, { name: x.name, lat: x.lat, lng: x.lng, w: (x.links || 1) * 30 });
+        let cands = [...seen.values()].sort((a2, b2) => b2.w - a2.w);
+        if (cands.length < 3) return json(res, { error: lang === 'en' ? 'Not enough landmarks here' : '這一帶景點不夠排路線' }, 404);
+        const anchor = cands[0];
+        const R = Math.max(700, km * 260);          // 環狀半徑尺度
+        cands = cands.filter(c => dm(anchor, c) < R).slice(0, 25);
+        // Gemini 挑選排序
+        const list = cands.map((c, i) => `${i + 1}. ${c.name} (${c.lat.toFixed(5)},${c.lng.toFixed(5)})`).join('\n');
+        const prompt = lang === 'en'
+          ? `Plan a pleasant ~${km} km LOOP running route. Pick 4 to 8 spots from this list, ordered to avoid backtracking; the route returns to the first spot. Also write a 2-sentence spoken intro of the route (English).
+Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":"..."} — names must be copied exactly from the list.`
+          : `幫跑者規畫一條約 ${km} 公里的「環狀」跑步路線。從下列景點挑 4 到 8 個,排序要順路不折返,最後會跑回第一個點。再寫兩句話的開場白(繁體中文,像導遊開場)。
+景點:\n${list}\n只回严格 JSON:{"route":["名稱1","名稱2",...],"blurb":"..."} —— 名稱必須跟清單一字不差。`;
+        const names = new Set(cands.map(c => c.name));
+        const out = await genAI(AI_VISION, {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.5, maxOutputTokens: 4096 },
+        }, 25000, t => {
+          try {
+            const j2 = JSON.parse(t.replace(/^[^{]*/, '').replace(/[^}]*$/, ''));
+            return Array.isArray(j2.route) && j2.route.length >= 3 && j2.route.every(n => names.has(n)) && !!j2.blurb;
+          } catch { return false; }
+        });
+        if (!out) return json(res, { error: 'AI 排不出來(額度或格式)' }, 502);
+        const plan = JSON.parse(out.text.replace(/^[^{]*/, '').replace(/[^}]*$/, ''));
+        let route = plan.route.map(n => cands.find(c => c.name === n));
+        // 距離把關:環狀估算=相鄰直線和(含回程)×1.3;超標砍尾、太短補最近的
+        const est = r2 => {
+          let d = 0;
+          for (let i = 0; i < r2.length; i++) d += dm(r2[i], r2[(i + 1) % r2.length]);
+          return d * 1.3;
+        };
+        while (route.length > 3 && est(route) > km * 1250) route.splice(route.length - 2, 1);
+        const unused = cands.filter(c => !route.includes(c));
+        while (est(route) < km * 750 && unused.length) {
+          const last = route[route.length - 1];
+          unused.sort((a2, b2) => dm(last, a2) - dm(last, b2));
+          route.splice(route.length, 0, unused.shift());
+        }
+        // 吸附到街景(吸不到的丟掉)
+        const snapped = [];
+        for (const c of route) {
+          try {
+            const f = await findPano(c.lat, c.lng, 90);
+            if (f) snapped.push({ name: c.name, lat: f.lat ?? c.lat, lng: f.lng ?? c.lng });
+          } catch {}
+        }
+        if (snapped.length < 3) return json(res, { error: '吸附街景後點太少' }, 502);
+        snapped.push({ ...snapped[0], name: snapped[0].name });   // 環狀:回到起點
+        return json(res, { pts: snapped, km: +(est(snapped.slice(0, -1)) / 1000).toFixed(1),
+                           blurb: plan.blurb, names: snapped.slice(0, -1).map(p2 => p2.name) });
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+    }
     if (u.pathname === '/api/citywarm') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
       if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll 格式要是 lat,lng' }, 400);

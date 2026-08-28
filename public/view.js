@@ -3112,6 +3112,21 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (S.role === 'follow') { draw(); return; }   // 從屬只等主控的廣播
   if (S.voice) startVoice();       // 權限給過的話不需要手勢就能起來
   if (q.get('run') === '1') { S.running = true; S.t0 = Date.now(); S.runId = Date.now(); runLoop(); }
+  // AI 排的路線帶著開場白:起跑穩了(6 秒)由導遊唸出來。
+  // id 用 ai: 前綴 → 沿用「AI 播報不盯著點看」的規則
+  try {
+    const blurb = localStorage.getItem('pano-blurb');
+    if (blurb && q.get('run') === '1') {
+      localStorage.removeItem('pano-blurb');
+      setTimeout(() => {
+        if (S.speaking) return;
+        const lines = (blurb.match(/[^。！？.!?]+[。！？.!?]?/g) || [blurb])
+          .map(t => t.trim()).filter(t => t.length > 1);
+        speak({ id: 'ai:plan' + Date.now(), name: T('路線開場', 'Route intro'),
+                lat: 0, lng: 0, script: blurb, lines, marks: [], photos: [], audio: '' });
+      }, 6000);
+    }
+  } catch {}
   // 關掉分頁前把最後幾個點存起來
   addEventListener('pagehide', saveTrack);
   addEventListener('visibilitychange', () => { if (document.hidden) saveTrack(); });

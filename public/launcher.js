@@ -336,6 +336,23 @@ async function search() {
     warmSpots(V.lat, V.lng);   // 主動把這一帶的景點標出來
   } catch { el('step').textContent = '搜尋失敗。'; }
 }
+// 🤖 AI 排路線:以地圖中心為城市,演算法+Gemini 排一條環狀路線,
+// 畫上地圖(沿用手點路線的 pts 機制),開場白存起來開跑時唸
+el('aiplan').onclick = async () => {
+  el('step').textContent = '🤖 AI 規畫路線中…(約十幾秒)';
+  try {
+    const r = await fetch(`/api/planroute?ll=${V.lat},${V.lng}&km=${el('plankm').value}${langQ()}`,
+      { signal: AbortSignal.timeout(60000) });
+    const j = await r.json();
+    if (j.error) { el('step').textContent = '⚠ ' + j.error; return; }
+    pts = j.pts.map(p => ({ lat: p.lat, lng: p.lng }));
+    shown = null;
+    V.lat = pts[0].lat; V.lng = pts[0].lng;
+    try { localStorage.setItem('pano-blurb', j.blurb || ''); } catch {}
+    drawMap(); say();
+    el('step').textContent = `🤖 約 ${j.km} km 環狀:${j.names.join('→')}。按「開始跑」出發!`;
+  } catch { el('step').textContent = '⚠ 規畫失敗,再試一次'; }
+};
 el('go').onclick = search;
 el('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
 
@@ -576,6 +593,7 @@ function langQ() {
     '先在地圖上點一下「起跑點」。': 'Click the map to set a start point.',
     '開始跑': 'Start running', '重設': 'Reset',
     '🌸 特色路線 ▸': '🌸 Special trails ▸',
+    '🤖 AI 排路線': '🤖 AI plan a route',
     '🗿馬丘比丘': '🗿 Machu Picchu', '🐫吉薩金字塔': '🐫 Giza Pyramids',
     '🏚軍艦島廢墟': '🏚 Hashima ruins', '🐧南極': '🐧 Antarctica',
     '🏔馬特洪冬景': '🏔 Matterhorn winter', '⛩伏見稻荷': '⛩ Fushimi Inari',
