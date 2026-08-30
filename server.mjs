@@ -153,6 +153,7 @@ async function placesPhotos(query, lat, lng) {
   console.log(`Places「${query}」→ ${pl?.displayName?.text || '無'},照片 ${ph.length} 張`);
   return ph.slice(0, 5).map(p2 => '/pphoto?n=' + encodeURIComponent(p2.name));
 }
+const elevMem = new Map();   // 海拔快取(~11m 網格)
 const cityMem = new Map();
 const cityBusy = new Map();
 const cityKey = (lat, lng) => `city_${Math.round(lat * 20)}_${Math.round(lng * 20)}`;
@@ -881,6 +882,33 @@ else: print('NONE')`;
     }
     // AI 排路線(混合式):演算法圈候選+把關距離,Gemini 挑選排序+寫開場白。
     // 環狀:終點回到起點。距離估算=相鄰直線和×1.3(繞路係數)。
+    // 海拔查詢:open-meteo(免金鑰),座標四捨五入到 ~11m 網格快取。
+    // 給自行車台的坡度模擬用:相鄰全景的海拔差 ÷ 距離 = 坡度%。
+    if (u.pathname === '/api/elev') {
+      const lls = (u.searchParams.get('lls') || '').split('|')
+        .map(t => t.split(',').map(Number)).filter(p2 => p2.length === 2 && p2.every(isFinite));
+      if (!lls.length) return json(res, { error: 'lls 格式:lat,lng|lat,lng' }, 400);
+      const out = [];
+      const miss = [];
+      for (const [la, ln] of lls) {
+        const k = la.toFixed(4) + ',' + ln.toFixed(4);
+        if (elevMem.has(k)) out.push({ k, e: elevMem.get(k) });
+        else miss.push([la, ln, k]);
+      }
+      if (miss.length) {
+        try {
+          const r = await fetch('https://api.open-meteo.com/v1/elevation?latitude='
+            + miss.map(m2 => m2[0]).join(',') + '&longitude=' + miss.map(m2 => m2[1]).join(','),
+            { signal: AbortSignal.timeout(8000) });
+          const j = await r.json();
+          (j.elevation || []).forEach((e, i) => {
+            elevMem.set(miss[i][2], e);
+            out.push({ k: miss[i][2], e });
+          });
+        } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+      }
+      return json(res, { elev: Object.fromEntries(out.map(o => [o.k, o.e])) });
+    }
     if (u.pathname === '/api/planroute') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
       const km = Math.max(1, Math.min(20, Number(u.searchParams.get('km')) || 5));

@@ -700,7 +700,9 @@ function drawInner() {
     + (S.panelIdx !== null ? `🖥 ${['左', '中', '右'][S.panelIdx]}片（${S.role === 'master' ? '主控' : '從屬'}）   ` : '')
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
     + (QZS.at && Date.now() - QZS.at < 4000
-         ? `🏃 QZ ${(QZS.kmh || 0).toFixed(1)} km/h${QZS.heart ? `  ♥${QZS.heart}` : ''}   `
+         ? `${QZS.watt ? '🚴' : '🏃'} ${(QZS.kmh || 0).toFixed(1)} km/h`
+           + `${QZS.watt ? `  ⚡${QZS.watt}W` : ''}${QZS.heart ? `  ♥${QZS.heart}` : ''}`
+           + `${BTC.g != null ? `  ⛰${BTC.g > 0 ? '+' : ''}${BTC.g.toFixed(1)}%` : ''}   `
        : xr.session && STK.seen ? `🕹 ${STK.kmh.toFixed(1)} km/h   `
        : xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   `
        : xr.session && HB.at ? `👣 ${HB.kmh.toFixed(1)} km/h   ` : '')
@@ -2088,41 +2090,100 @@ async function btConnect() {
       filters: [{ services: ['fitness_machine'] }],
       optionalServices: ['heart_rate'] });
     const srv = await (await dev.gatt.connect()).getPrimaryService('fitness_machine');
-    const ch = await srv.getCharacteristic(0x2ACD);   // Treadmill Data
+    // 跑步機(0x2ACD Treadmill Data)或自行車台(0x2AD2 Indoor Bike Data),
+    // 有哪個聽哪個
+    let ch = null, isBike = false;
+    try { ch = await srv.getCharacteristic(0x2ACD); }
+    catch { ch = await srv.getCharacteristic(0x2AD2); isBike = true; }
     await ch.startNotifications();
     ch.addEventListener('characteristicvaluechanged', e => {
       const v = e.target.value;
       const flags = v.getUint16(0, true);
-      QZS.kmh = v.getUint16(2, true) / 100;           // 瞬時速度必在最前
-      // 心率在一串可選欄位後面,照旗標逐欄跳過:
-      // bit1 平均速度+2、bit2 總距離+3、bit3 坡度+4、bit4 爬升+4、
-      // bit5 瞬時配速+1、bit6 平均配速+1、bit7 熱量+5、bit8 心率 u8
-      let o = 4;
-      const skip = [[1,2],[2,3],[3,4],[4,4],[5,1],[6,1],[7,5]];
-      for (const [bit, n] of skip) if (flags & (1 << bit)) o += n;
-      if (flags & (1 << 8) && o < v.byteLength) QZS.heart = v.getUint8(o);
+      if (!isBike) {
+        QZS.kmh = v.getUint16(2, true) / 100;
+        let o = 4;
+        for (const [bit, n] of [[1,2],[2,3],[3,4],[4,4],[5,1],[6,1],[7,5]])
+          if (flags & (1 << bit)) o += n;
+        if (flags & (1 << 8) && o < v.byteLength) QZS.heart = v.getUint8(o);
+      } else {
+        // FTMS Indoor Bike Data:速度(0.01km/h)、踏頻(0.5rpm)、功率(W)、心率
+        let o = 2;
+        if (!(flags & 1)) { QZS.kmh = v.getUint16(o, true) / 100; o += 2; }
+        if (flags & 2) o += 2;
+        if (flags & 4) { QZS.cad = v.getUint16(o, true) / 2; o += 2; }
+        if (flags & 8) o += 2;
+        if (flags & 16) o += 3;
+        if (flags & 32) o += 2;
+        if (flags & 64) { QZS.watt = v.getInt16(o, true); o += 2; }
+        if (flags & 128) o += 2;
+        if (flags & 256) o += 5;
+        if (flags & 512 && o < v.byteLength) QZS.heart = v.getUint8(o);
+      }
       QZS.at = Date.now();
     });
+    // 自行車台:拿控制權,之後把街景坡度寫回去(上坡踏板變重)
+    if (isBike) {
+      try {
+        BTC.ctrl = await srv.getCharacteristic(0x2AD9);   // Fitness Machine Control Point
+        await BTC.ctrl.writeValue(new Uint8Array([0x00])); // Request Control
+        S.note = T('🚴 練習台已連上,坡度連動啟用', '🚴 Trainer connected — terrain sim on');
+      } catch { S.note = T('🚴 已連上(這台不支援坡度控制)', '🚴 Connected (no slope control)'); }
+    } else {
+      S.note = T('🏃 跑步機已連上,速度交給它', '🏃 Treadmill connected — it drives the pace now');
+    }
     const b = document.getElementById('btbtn');
     if (b) b.style.display = 'none';
-    S.note = T('🏃 跑步機已連上,速度交給它', '🏃 Treadmill connected — it drives the pace now');
     dev.addEventListener('gattserverdisconnected', () => {
-      QZS.at = 0;
+      QZS.at = 0; BTC.ctrl = null;
       if (b) b.style.display = 'block';
-      S.note = T('⚠ 跑步機斷線,退回原本的速度', '⚠ Treadmill disconnected — falling back');
+      S.note = T('⚠ 器材斷線,退回原本的速度', '⚠ Trainer disconnected — falling back');
     });
   } catch (e) {
-    if (String(e).includes('cancel')) return;         // 使用者關掉選擇框
-    S.note = '🏃 ' + String(e.message || e).slice(0, 60);
+    if (String(e).includes('cancel')) return;
+    S.note = '🚴 ' + String(e.message || e).slice(0, 60);
   }
 }
+// 坡度連動:每換一顆全景,查兩點海拔差 ÷ 距離 = 坡度%,平滑後寫回練習台。
+// FTMS「模擬參數」指令:0x11 + 風速 i16(0) + 坡度 i16(0.01%) + 滾阻 u8 + 風阻 u8
+const BTC = { ctrl: null, g: null, lastSent: null, prevPt: null, lastId: null };
+async function slopeTick() {
+  const m = S.cur?.meta;
+  if (!m || m.pano === BTC.lastId) return;
+  BTC.lastId = m.pano;
+  try {
+    const k = m.lat.toFixed(4) + ',' + m.lng.toFixed(4);
+    const j = await (await fetch(`/api/elev?lls=${m.lat},${m.lng}`,
+      { signal: AbortSignal.timeout(6000) })).json();
+    const e = j.elev?.[k];
+    if (e == null) return;
+    if (BTC.prevPt) {
+      const d = distM(BTC.prevPt, m);
+      if (d > 3) {
+        const raw = Math.max(-12, Math.min(12, (e - BTC.prevPt.e) / d * 100));
+        BTC.g = BTC.g == null ? raw : BTC.g * 0.4 + raw * 0.6;   // 平滑
+        if (BTC.ctrl && (BTC.lastSent == null || Math.abs(BTC.g - BTC.lastSent) > 0.2)) {
+          const buf = new DataView(new ArrayBuffer(7));
+          buf.setUint8(0, 0x11);
+          buf.setInt16(1, 0, true);                         // 風速 0
+          buf.setInt16(3, Math.round(BTC.g * 100), true);   // 坡度(0.01%)
+          buf.setUint8(5, 40);                              // 滾動阻力 0.004
+          buf.setUint8(6, 51);                              // 風阻 0.51
+          await BTC.ctrl.writeValue(buf.buffer);
+          BTC.lastSent = BTC.g;
+        }
+      }
+    }
+    BTC.prevPt = { lat: m.lat, lng: m.lng, e };
+  } catch {}
+}
+setInterval(slopeTick, 1500);
 window.btConnect = btConnect;
 // 有 Web Bluetooth 的環境才顯示按鈕(Quest 瀏覽器沒有,那邊用 QZ)
 setTimeout(() => {
   const b = document.getElementById('btbtn');
   if (b && navigator.bluetooth) {
     b.style.display = 'block';
-    if (EN_UI) b.textContent = '🏃 Connect treadmill';
+    if (EN_UI) b.textContent = '🚴 Connect trainer';
   }
 }, 1500);
 setInterval(async () => {
