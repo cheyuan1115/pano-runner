@@ -887,6 +887,84 @@ else: print('NONE')`;
     // ── Strava:OAuth(一次性授權)+ 上傳代理 ──────────────
     // 設定:~/.keys/strava = {"id":"...","secret":"..."}(API 應用的憑證)
     // 授權:開 /strava/auth 走一次 → refresh token 存 ~/.keys/strava-token.json
+    // ── Strava 免 API 上傳:自動化專用 Chrome 分身 ──────────────
+    // API 被鎖訂閱牆後的替代:專用 profile 登入一次,之後 CDP 操作
+    // strava.com/upload 代傳 TCX(DOM.setFileInputFiles 塞檔案)。
+    if (u.pathname === '/strava/weblogin') {
+      const { spawn } = await import('node:child_process');
+      spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        ['--user-data-dir=' + join(process.env.HOME, '.keys', 'strava-chrome'),
+         '--no-first-run', '--no-default-browser-check', '--window-size=1000,760',
+         'https://www.strava.com/login'], { detached: true, stdio: 'ignore' }).unref();
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end('<body style="font:19px sans-serif;padding:40px;background:#111;color:#eee">'
+        + '開了一個專用瀏覽器視窗 —— 在那裡登入 Strava(記住我),登入完成後關掉那個視窗即可。'
+        + '之後每趟結束會自動用它上傳。</body>');
+    }
+    if (u.pathname === '/api/strava/webupload' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 5e6) break; }
+      try {
+        const { tcx, ride } = JSON.parse(body);
+        // 1) 落地存檔(無論上傳成敗,紀錄都在)
+        const dir = join(process.env.HOME, 'pano-runs');
+        await mkdir(dir, { recursive: true });
+        const d = new Date();
+        const fname = `pano-${ride ? 'ride' : 'run'}-${d.getMonth() + 1}-${d.getDate()}-`
+          + `${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}.tcx`;
+        const fpath = join(dir, fname);
+        await writeFile(fpath, tcx);
+        // 2) CDP 操作專用 Chrome 上傳
+        const { spawn, execSync } = await import('node:child_process');
+        try { execSync('pkill -f strava-chrome'); await new Promise(r2 => setTimeout(r2, 800)); } catch {}
+        spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          ['--user-data-dir=' + join(process.env.HOME, '.keys', 'strava-chrome'),
+           '--remote-debugging-port=9333', '--no-first-run', '--no-default-browser-check',
+           '--window-size=900,700', '--window-position=2000,100',
+           'https://www.strava.com/upload/select'], { detached: true, stdio: 'ignore' }).unref();
+        let target = null;
+        for (let i = 0; i < 40 && !target; i++) {
+          await new Promise(r2 => setTimeout(r2, 500));
+          try {
+            const list = await (await fetch('http://127.0.0.1:9333/json')).json();
+            target = list.find(t => t.type === 'page' && t.url.includes('strava'));
+          } catch {}
+        }
+        if (!target) throw new Error('自動化瀏覽器沒起來');
+        const ws = new WebSocket(target.webSocketDebuggerUrl);
+        let mid = 0; const pend = new Map();
+        ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } };
+        await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = no; });
+        const send = (m2, p2 = {}) => new Promise(r2 => { const i = ++mid; pend.set(i, r2); ws.send(JSON.stringify({ id: i, method: m2, params: p2 })); });
+        await send('Runtime.enable'); await send('DOM.enable'); await send('Page.enable');
+        // 等頁面就緒,找檔案輸入框(沒登入的話會被轉去 login → 回報要先登入)
+        let nodeId = 0, needLogin = false;
+        for (let i = 0; i < 30; i++) {
+          await new Promise(r2 => setTimeout(r2, 700));
+          const urlNow = (await send('Runtime.evaluate', { expression: 'location.pathname', returnByValue: true })).result?.result?.value || '';
+          if (urlNow.includes('login')) { needLogin = true; break; }
+          const doc = await send('DOM.getDocument');
+          const q = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: 'input[type=file]' });
+          if (q.result?.nodeId) { nodeId = q.result.nodeId; break; }
+        }
+        if (needLogin) { execSync('pkill -f strava-chrome || true'); return json(res, { saved: fname, error: '先開 /strava/weblogin 登入一次' }); }
+        if (!nodeId) { execSync('pkill -f strava-chrome || true'); return json(res, { saved: fname, error: '找不到上傳框(Strava 改版?)' }); }
+        await send('DOM.setFileInputFiles', { files: [fpath], nodeId });
+        // 等處理:成功時頁面會出現活動編輯列或跳轉
+        let okUp = false;
+        for (let i = 0; i < 40; i++) {
+          await new Promise(r2 => setTimeout(r2, 1000));
+          const t2 = (await send('Runtime.evaluate', { expression:
+            "document.body.innerText.slice(0,2000)", returnByValue: true })).result?.result?.value || '';
+          if (/已建立|activity|Activity|編輯|Edit|saved|完成/i.test(t2) && !/error|錯誤|failed/i.test(t2)) { okUp = true; break; }
+        }
+        await new Promise(r2 => setTimeout(r2, 3000));   // 給它幾秒完成收尾
+        execSync('pkill -f strava-chrome || true');
+        console.log('Strava 網頁上傳:', fname, okUp ? 'OK' : '未確認');
+        return json(res, { ok: okUp ? 1 : 0, saved: fname,
+          error: okUp ? undefined : '已存檔;上傳結果未確認,必要時手動拖 strava.com/upload' });
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+    }
     if (u.pathname === '/strava/auth') {
       try {
         const cfg = JSON.parse(await readFile(join(process.env.HOME, '.keys', 'strava'), 'utf8'));

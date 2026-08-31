@@ -1408,32 +1408,20 @@ function buildTCX(track, sport) {
 }
 async function stravaUpload() {
   if (!S.track || S.track.length < 10) return;
-  // 一律先把完整 TCX 存到本機(含心率/功率/踏頻/海拔)——
-  // Strava 免費帳號不能用 API(2025 改成訂閱者限定),但網頁手動上傳
-  // 免費:strava.com/upload 一次拖 25 個。有訂閱的話下面會接著自動傳。
+  // 免 API 一鍵上傳:TCX 交給伺服器 → 落地 ~/pano-runs/ →
+  // 自動化 Chrome 分身代拖 strava.com/upload(要先 /strava/weblogin 登入一次)
   try {
-    const rode0 = S.track.some(p => p.w > 0);
-    const tcx0 = buildTCX(S.track, rode0 ? 'Biking' : 'Running');
-    const aEl = document.createElement('a');
-    const d = new Date();
-    aEl.href = URL.createObjectURL(new Blob([tcx0], { type: 'application/xml' }));
-    aEl.download = `pano-${rode0 ? 'ride' : 'run'}-${d.getMonth() + 1}-${d.getDate()}-`
-      + `${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}.tcx`;
-    aEl.click();
-  } catch {}
-  try {
-    const st = await (await fetch('/api/strava/status')).json();
-    if (!st.ok) return;                      // 沒授權 API 就到此為止(檔案已存)
-    const rode = S.track.some(p => p.w > 0); // 有功率=騎車
+    const rode = S.track.some(p => p.w > 0);
     const tcx = buildTCX(S.track, rode ? 'Biking' : 'Running');
-    const name = `pano-runner ${rode ? T('虛擬騎行', 'virtual ride') : T('虛擬跑步', 'virtual run')} ${(S.moved / 1000).toFixed(1)} km`;
     S.note = '⬆ Strava…'; draw();
-    const r = await (await fetch('/api/strava/upload', { method: 'POST',
+    const r = await (await fetch('/api/strava/webupload', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tcx, name, ride: rode }) })).json();
+      body: JSON.stringify({ tcx, ride: rode }),
+      signal: AbortSignal.timeout(90000) })).json();
     S.note = r.ok ? T('⬆ 已上傳 Strava ✓', '⬆ Uploaded to Strava ✓')
-                  : '⬆ Strava:' + (r.error || '失敗');
-    S.noteHold = Date.now() + 12000;
+          : r.saved ? T(`💾 已存 ${r.saved}(${r.error || ''})`, `💾 Saved ${r.saved} (${r.error || ''})`)
+          : '⬆ ' + (r.error || '失敗');
+    S.noteHold = Date.now() + 15000;
     draw();
   } catch {}
 }
