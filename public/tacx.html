@@ -1,0 +1,142 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Tacx 實驗室</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0d0e10; color: #e8e8ea; font: 14px/1.6 ui-monospace, monospace; padding: 18px; }
+  h1 { font-size: 17px; }
+  button { background: #2f7d4f; color: #fff; border: 0; border-radius: 7px; padding: 8px 14px;
+           font: inherit; cursor: pointer; margin: 0 6px 6px 0; }
+  button.b2 { background: #4a5af8; }
+  button.b3 { background: #7d2f2f; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+  td, th { border: 1px solid #2a2d33; padding: 4px 8px; font-size: 12px; text-align: left; vertical-align: top; }
+  th { background: #16181c; }
+  .hex { color: #6fd08c; }
+  .parsed { color: #e8c66a; }
+  #log { margin-top: 10px; background: #111318; border: 1px solid #2a2d33; border-radius: 8px;
+         padding: 8px 10px; height: 150px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; }
+</style>
+<h1>🚴 Tacx 實驗室 — 藍牙全盤點</h1>
+<div>
+  <button onclick="connect()">1️⃣ 連線並盤點</button>
+  <button class="b2" onclick="ftmsInit()">FTMS 啟動(00+07)</button>
+  <button class="b2" onclick="ftmsSlope(5)">FTMS 坡度 +5%</button>
+  <button class="b2" onclick="ftmsSlope(0)">FTMS 坡度 0%</button>
+  <button class="b3" onclick="fecSlope(5)">FE-C 坡度 +5%</button>
+  <button class="b3" onclick="fecSlope(0)">FE-C 坡度 0%</button>
+</div>
+<table id="tbl"><tr><th>服務</th><th>特徵值</th><th>屬性</th><th>次數</th><th>最新封包(hex)</th><th>解讀</th></tr></table>
+<div id="log">等待連線…(踩動時看「次數」哪一列在跳、hex 哪一列在變)</div>
+<script>
+const $ = id => document.getElementById(id);
+const log = t => { $('log').textContent = new Date().toTimeString().slice(0,8) + ' ' + t + '\n' + $('log').textContent.slice(0, 4000); };
+let gatt = null, ftmsCtrl = null, fecTx = null;
+const rows = new Map();
+
+// 候選服務:標準全家桶 + 已知的各家私有 UUID
+const CANDIDATES = [
+  'fitness_machine', 'cycling_power', 'cycling_speed_and_cadence', 'heart_rate',
+  'device_information', 'battery_service',
+  '6e40fec1-b5a3-f393-e0a9-e50e24dcca9e',   // Tacx FE-C over BLE
+  '669aa605-0c08-969e-e211-86ad5062675f',   // Tacx Vortex/Bushido 私有
+  '6e40fff0-b5a3-f393-e0a9-e50e24dcca9e',   // Tacx 舊 UART 變體
+  'a026ee01-0a7d-4ab3-97fa-f1500f9feb8b',   // Wahoo 私有(參考)
+];
+
+function parseHint(uuid, v) {
+  try {
+    const u = uuid.slice(4, 8);
+    if (u === '2acd') return `跑步機 速度=${(v.getUint16(2,true)/100).toFixed(1)}km/h`;
+    if (u === '2ad2') {
+      const fl = v.getUint16(0, true); let o = 2, out = [];
+      if (!(fl & 1)) { out.push(`速度=${(v.getUint16(o,true)/100).toFixed(1)}`); o += 2; }
+      if (fl & 2) o += 2;
+      if (fl & 4) { out.push(`踏頻=${v.getUint16(o,true)/2}`); o += 2; }
+      if (fl & 8) o += 2; if (fl & 16) o += 3; if (fl & 32) o += 2;
+      if (fl & 64) { out.push(`功率=${v.getInt16(o,true)}W`); }
+      return '單車 ' + out.join(' ');
+    }
+    if (u === '2a63') return `功率計 W=${v.getInt16(2,true)}`;
+    if (u === '2a5b') {
+      const fl = v.getUint8(0); let o = 1, out = [];
+      if (fl & 1) { out.push(`輪=${v.getUint32(o,true)}`); o += 6; }
+      if (fl & 2) { out.push(`曲柄=${v.getUint16(o,true)}`); }
+      return 'CSC ' + out.join(' ');
+    }
+    if (uuid.startsWith('6e40fec2')) {
+      const b = new Uint8Array(v.buffer);
+      if (b[0] === 0xA4) {
+        const p = b.slice(4, 12);
+        if (p[0] === 0x10) return `FE-C頁16 速度=${((p[4]|(p[5]<<8))*0.0036).toFixed(1)}km/h`;
+        if (p[0] === 0x19) return `FE-C頁25 踏頻=${p[2]} 功率=${p[5]|((p[6]&15)<<8)}W`;
+        return `FE-C頁${p[0]}`;
+      }
+    }
+  } catch {}
+  return '';
+}
+
+async function connect() {
+  try {
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'Tacx' }, { services: ['fitness_machine'] }],
+      optionalServices: CANDIDATES });
+    log('連上 ' + dev.name);
+    gatt = await dev.gatt.connect();
+    const svcs = await gatt.getPrimaryServices();
+    log('服務數:' + svcs.length);
+    for (const svc of svcs) {
+      const chars = await svc.getCharacteristics();
+      for (const ch of chars) {
+        const props = ['notify','indicate','read','write','writeWithoutResponse']
+          .filter(p => ch.properties[p]).join(',');
+        const key = svc.uuid.slice(0, 8) + '/' + ch.uuid.slice(0, 8);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${svc.uuid.slice(0,8)}</td><td>${ch.uuid.slice(0,8)}</td>
+          <td>${props}</td><td class="n">0</td><td class="hex"></td><td class="parsed"></td>`;
+        $('tbl').appendChild(tr);
+        rows.set(key, { tr, n: 0 });
+        if (ch.uuid.slice(4, 8) === '2ad9') ftmsCtrl = ch;
+        if (ch.uuid.startsWith('6e40fec3')) fecTx = ch;
+        if (ch.properties.notify || ch.properties.indicate) {
+          try {
+            await ch.startNotifications();
+            ch.addEventListener('characteristicvaluechanged', e => {
+              const r = rows.get(key); r.n++;
+              const v = e.target.value;
+              r.tr.querySelector('.n').textContent = r.n;
+              r.tr.querySelector('.hex').textContent =
+                [...new Uint8Array(v.buffer)].slice(0, 18).map(x => x.toString(16).padStart(2,'0')).join(' ');
+              r.tr.querySelector('.parsed').textContent = parseHint(ch.uuid, v);
+            });
+          } catch (e2) { log('訂閱失敗 ' + key + ':' + e2.message); }
+        }
+      }
+    }
+    log('盤點完成 —— 現在踩動,看哪幾列的「次數」在跳');
+  } catch (e) { log('連線失敗:' + e.message); }
+}
+async function ftmsInit() {
+  if (!ftmsCtrl) return log('沒有 FTMS 控制點');
+  await ftmsCtrl.writeValue(new Uint8Array([0x00])); await new Promise(r => setTimeout(r, 300));
+  await ftmsCtrl.writeValue(new Uint8Array([0x07]));
+  log('FTMS 已送 RequestControl + Start');
+}
+async function ftmsSlope(g) {
+  if (!ftmsCtrl) return log('沒有 FTMS 控制點');
+  const b = new DataView(new ArrayBuffer(7));
+  b.setUint8(0, 0x11); b.setInt16(1, 0, true); b.setInt16(3, g * 100, true);
+  b.setUint8(5, 40); b.setUint8(6, 51);
+  try { await ftmsCtrl.writeValue(b.buffer); log(`FTMS 坡度 ${g}% 已送 —— 踏板有變重嗎?`); }
+  catch (e) { log('FTMS 坡度失敗:' + e.message); }
+}
+async function fecSlope(g) {
+  if (!fecTx) return log('沒有 FE-C 通道(這台可能不支援)');
+  const g16 = Math.round((g + 200) * 100);
+  const fr = [0xA4, 0x09, 0x4F, 0x05, 0x33, 0xFF, 0xFF, 0xFF, 0xFF, g16 & 0xFF, (g16 >> 8) & 0xFF, 80];
+  fr.push(fr.reduce((x, y) => x ^ y, 0));
+  try { await fecTx.writeValue(new Uint8Array(fr)); log(`FE-C 坡度 ${g}% 已送 —— 踏板有變重嗎?`); }
+  catch (e) { log('FE-C 坡度失敗:' + e.message); }
+}
+</script>

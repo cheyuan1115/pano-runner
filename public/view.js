@@ -2154,8 +2154,10 @@ async function btConnect() {
     // 頁16=速度(0.001m/s),頁25=踏頻+功率(12bit),頁51=坡度控制。
     try {
       const tsrv = await dev.gatt.getPrimaryService('6e40fec1-b5a3-f393-e0a9-e50e24dcca9e');
-      FEC.tx = await tsrv.getCharacteristic('6e40fec2-b5a3-f393-e0a9-e50e24dcca9e');
-      const rx = await tsrv.getCharacteristic('6e40fec3-b5a3-f393-e0a9-e50e24dcca9e');
+      // 實機盤點(Flux 17759):fec2=notify(資料出口)、fec3=write ——
+      // 跟常見文件寫的相反,以實測為準
+      FEC.tx = await tsrv.getCharacteristic('6e40fec3-b5a3-f393-e0a9-e50e24dcca9e');
+      const rx = await tsrv.getCharacteristic('6e40fec2-b5a3-f393-e0a9-e50e24dcca9e');
       await rx.startNotifications();
       rx.addEventListener('characteristicvaluechanged', e => {
         const b = new Uint8Array(e.target.value.buffer);
