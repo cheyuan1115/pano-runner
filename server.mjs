@@ -884,6 +884,67 @@ else: print('NONE')`;
     // 環狀:終點回到起點。距離估算=相鄰直線和×1.3(繞路係數)。
     // 海拔查詢:open-meteo(免金鑰),座標四捨五入到 ~11m 網格快取。
     // 給自行車台的坡度模擬用:相鄰全景的海拔差 ÷ 距離 = 坡度%。
+    // ── Strava:OAuth(一次性授權)+ 上傳代理 ──────────────
+    // 設定:~/.keys/strava = {"id":"...","secret":"..."}(API 應用的憑證)
+    // 授權:開 /strava/auth 走一次 → refresh token 存 ~/.keys/strava-token.json
+    if (u.pathname === '/strava/auth') {
+      try {
+        const cfg = JSON.parse(await readFile(join(process.env.HOME, '.keys', 'strava'), 'utf8'));
+        res.writeHead(302, { location: 'https://www.strava.com/oauth/authorize?client_id=' + cfg.id
+          + '&redirect_uri=' + encodeURIComponent('http://localhost:8877/strava/cb')
+          + '&response_type=code&scope=activity:write&approval_prompt=auto' });
+        return res.end();
+      } catch { return json(res, { error: '先把 Strava 憑證放到 ~/.keys/strava' }, 500); }
+    }
+    if (u.pathname === '/strava/cb') {
+      try {
+        const cfg = JSON.parse(await readFile(join(process.env.HOME, '.keys', 'strava'), 'utf8'));
+        const r = await fetch('https://www.strava.com/oauth/token', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ client_id: cfg.id, client_secret: cfg.secret,
+            code: u.searchParams.get('code'), grant_type: 'authorization_code' }) });
+        const j = await r.json();
+        if (!j.refresh_token) return json(res, j, 502);
+        await writeFile(join(process.env.HOME, '.keys', 'strava-token.json'), JSON.stringify(j));
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        return res.end('<body style="font:20px sans-serif;padding:40px;background:#111;color:#eee">✅ Strava 已連結!之後每趟自動上傳。這頁可以關了。</body>');
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+    }
+    if (u.pathname === '/api/strava/status') {
+      try {
+        await readFile(join(process.env.HOME, '.keys', 'strava-token.json'));
+        return json(res, { ok: 1 });
+      } catch { return json(res, { ok: 0 }); }
+    }
+    if (u.pathname === '/api/strava/upload' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 5e6) break; }
+      try {
+        const { tcx, name, ride } = JSON.parse(body);
+        const cfg = JSON.parse(await readFile(join(process.env.HOME, '.keys', 'strava'), 'utf8'));
+        let tok = JSON.parse(await readFile(join(process.env.HOME, '.keys', 'strava-token.json'), 'utf8'));
+        if ((tok.expires_at || 0) * 1000 < Date.now() + 60000) {   // 過期就用 refresh 換新
+          const r = await fetch('https://www.strava.com/oauth/token', { method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: cfg.id, client_secret: cfg.secret,
+              refresh_token: tok.refresh_token, grant_type: 'refresh_token' }) });
+          tok = await r.json();
+          await writeFile(join(process.env.HOME, '.keys', 'strava-token.json'), JSON.stringify(tok));
+        }
+        const fd = new FormData();
+        fd.append('file', new Blob([tcx], { type: 'application/xml' }), 'run.tcx');
+        fd.append('data_type', 'tcx');
+        fd.append('name', name || 'pano-runner');
+        fd.append('trainer', '1');                       // 標成室內/虛擬
+        fd.append('activity_type', ride ? 'ride' : 'run');
+        const up = await fetch('https://www.strava.com/api/v3/uploads', { method: 'POST',
+          headers: { Authorization: 'Bearer ' + tok.access_token }, body: fd });
+        const uj = await up.json();
+        if (uj.error) return json(res, { error: String(uj.error).slice(0, 120) }, 502);
+        console.log('Strava 上傳:', uj.id_str || uj.id, uj.status);
+        return json(res, { ok: 1, id: uj.id_str || uj.id });
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+    }
     if (u.pathname === '/api/elev') {
       const lls = (u.searchParams.get('lls') || '').split('|')
         .map(t => t.split(',').map(Number)).filter(p2 => p2.length === 2 && p2.every(isFinite));

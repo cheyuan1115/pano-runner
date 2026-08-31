@@ -1354,7 +1354,15 @@ function saveTrack() {
 
 function trackPoint(meta) {
   if (!S.runId) S.runId = Date.now();
-  S.track.push({ lat: +meta.lat.toFixed(6), lng: +meta.lng.toFixed(6), t: Date.now() });
+  const pt = { lat: +meta.lat.toFixed(6), lng: +meta.lng.toFixed(6), t: Date.now() };
+  // 運動數據順手記進去(TCX/Strava 用):海拔來自坡度服務,其餘來自器材
+  if (BTC.prevPt?.e != null) pt.e = BTC.prevPt.e;
+  if (QZS.at && Date.now() - QZS.at < 4000) {
+    if (QZS.heart) pt.h = QZS.heart;
+    if (QZS.watt != null) pt.w = QZS.watt;
+    if (QZS.cad) pt.c = Math.round(QZS.cad);
+  }
+  S.track.push(pt);
   if (S.track.length % 10 === 0) saveTrack();
 }
 
@@ -1379,6 +1387,56 @@ function download(text, filename, mime) {
 
 // 結束跑步：停下來、存檔、匯出 GPX。
 // 跟空白鍵的「暫停」不一樣 —— 暫停只是停住畫面，這個是收工。
+// TCX(運動平台標準格式):含海拔/心率/踏頻/功率
+function buildTCX(track, sport) {
+  const iso = t => new Date(t).toISOString();
+  const pts = track.map(p => '<Trackpoint><Time>' + iso(p.t) + '</Time>'
+    + `<Position><LatitudeDegrees>${p.lat}</LatitudeDegrees><LongitudeDegrees>${p.lng}</LongitudeDegrees></Position>`
+    + (p.e != null ? `<AltitudeMeters>${p.e}</AltitudeMeters>` : '')
+    + (p.h ? `<HeartRateBpm><Value>${p.h}</Value></HeartRateBpm>` : '')
+    + (p.c ? `<Cadence>${p.c}</Cadence>` : '')
+    + (p.w != null ? `<Extensions><ns3:TPX xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2"><ns3:Watts>${p.w}</ns3:TPX></Extensions>`.replace('</ns3:TPX>', '</ns3:Watts></ns3:TPX>') : '')
+    + '</Trackpoint>').join('');
+  const t0 = iso(track[0].t);
+  const secs = Math.round((track[track.length - 1].t - track[0].t) / 1000);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+<Activities><Activity Sport="${sport}"><Id>${t0}</Id>
+<Lap StartTime="${t0}"><TotalTimeSeconds>${secs}</TotalTimeSeconds>
+<DistanceMeters>${Math.round(S.moved)}</DistanceMeters><Intensity>Active</Intensity><TriggerMethod>Manual</TriggerMethod>
+<Track>${pts}</Track></Lap></Activity></Activities></TrainingCenterDatabase>`;
+}
+async function stravaUpload() {
+  if (!S.track || S.track.length < 10) return;
+  // 一律先把完整 TCX 存到本機(含心率/功率/踏頻/海拔)——
+  // Strava 免費帳號不能用 API(2025 改成訂閱者限定),但網頁手動上傳
+  // 免費:strava.com/upload 一次拖 25 個。有訂閱的話下面會接著自動傳。
+  try {
+    const rode0 = S.track.some(p => p.w > 0);
+    const tcx0 = buildTCX(S.track, rode0 ? 'Biking' : 'Running');
+    const aEl = document.createElement('a');
+    const d = new Date();
+    aEl.href = URL.createObjectURL(new Blob([tcx0], { type: 'application/xml' }));
+    aEl.download = `pano-${rode0 ? 'ride' : 'run'}-${d.getMonth() + 1}-${d.getDate()}-`
+      + `${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}.tcx`;
+    aEl.click();
+  } catch {}
+  try {
+    const st = await (await fetch('/api/strava/status')).json();
+    if (!st.ok) return;                      // 沒授權 API 就到此為止(檔案已存)
+    const rode = S.track.some(p => p.w > 0); // 有功率=騎車
+    const tcx = buildTCX(S.track, rode ? 'Biking' : 'Running');
+    const name = `pano-runner ${rode ? T('虛擬騎行', 'virtual ride') : T('虛擬跑步', 'virtual run')} ${(S.moved / 1000).toFixed(1)} km`;
+    S.note = '⬆ Strava…'; draw();
+    const r = await (await fetch('/api/strava/upload', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tcx, name, ride: rode }) })).json();
+    S.note = r.ok ? T('⬆ 已上傳 Strava ✓', '⬆ Uploaded to Strava ✓')
+                  : '⬆ Strava:' + (r.error || '失敗');
+    S.noteHold = Date.now() + 12000;
+    draw();
+  } catch {}
+}
 function finishRun(text) {
   const wasRunning = S.running;
   S.running = false;
@@ -1388,6 +1446,7 @@ function finishRun(text) {
     exportGPX();
     S.note = `⏹ 結束${text ? `（聽到「${text}」）` : ''}　`
       + `${S.steps} 步　${(S.moved / 1000).toFixed(2)} km　GPX 已存檔`;
+    stravaUpload();                  // 有設定 Strava 就自動上傳(TCX 含功率心率)
   } else {
     S.note = `⏹ 結束${text ? `（聽到「${text}」）` : ''}　還沒跑到可以存檔的距離`;
   }
