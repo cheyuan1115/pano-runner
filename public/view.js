@@ -2123,7 +2123,8 @@ async function btConnect() {
         let o = 2;
         if (!(flags & 1)) { QZS.kmh = v.getUint16(o, true) / 100; o += 2; }
         if (flags & 2) o += 2;
-        if (flags & 4) { QZS.cad = v.getUint16(o, true) / 2; o += 2; }
+        if (flags & 4) { const c2 = v.getUint16(o, true) / 2; o += 2;
+          if (c2 > 0 || !FEC.on) QZS.cad = c2; }   // Flux 的 FTMS 踏頻恆 0,別蓋 FE-C 的
         if (flags & 8) o += 2;
         if (flags & 16) o += 3;
         if (flags & 32) o += 2;
@@ -2289,14 +2290,9 @@ async function slopeTick() {
         const raw = Math.max(-12, Math.min(12, (e - BTC.prevPt.e) / d * 100));
         BTC.g = BTC.g == null ? raw : BTC.g * 0.4 + raw * 0.6;   // 平滑
         if ((BTC.ctrl || FEC.tx) && (BTC.lastSent == null || Math.abs(BTC.g - BTC.lastSent) > 0.2)) {
-          if (FEC.tx) {
-            // FE-C 頁51(Track Resistance):坡度 u16 = (坡度%+200)×100
-            const g16 = Math.round((BTC.g + 200) * 100);
-            const pl = [0x33, 0xFF, 0xFF, 0xFF, 0xFF, g16 & 0xFF, (g16 >> 8) & 0xFF, 80];
-            const fr = [0xA4, 0x09, 0x4F, 0x05, ...pl];
-            fr.push(fr.reduce((x, y) => x ^ y, 0));
-            await FEC.tx.writeValue(new Uint8Array(fr)).catch(() => {});
-          } else {
+          // 實驗室實證:Flux 的 FTMS 坡度控制有效(踏板變重+回執 80 11 01),
+          // FTMS 優先;FE-C 留作沒有 FTMS 控制點的機型備援
+          if (BTC.ctrl) {
             const buf = new DataView(new ArrayBuffer(7));
             buf.setUint8(0, 0x11);
             buf.setInt16(1, 0, true);
@@ -2304,6 +2300,13 @@ async function slopeTick() {
             buf.setUint8(5, 40);
             buf.setUint8(6, 51);
             await BTC.ctrl.writeValue(buf.buffer);
+          } else if (FEC.tx) {
+            // FE-C 頁51(Track Resistance):坡度 u16 = (坡度%+200)×100
+            const g16 = Math.round((BTC.g + 200) * 100);
+            const pl = [0x33, 0xFF, 0xFF, 0xFF, 0xFF, g16 & 0xFF, (g16 >> 8) & 0xFF, 80];
+            const fr = [0xA4, 0x09, 0x4F, 0x05, ...pl];
+            fr.push(fr.reduce((x, y) => x ^ y, 0));
+            await FEC.tx.writeValue(new Uint8Array(fr)).catch(() => {});
           }
           BTC.lastSent = BTC.g;
         }
