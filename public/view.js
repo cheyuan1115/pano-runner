@@ -700,9 +700,13 @@ function drawInner() {
     + (S.panelIdx !== null ? `🖥 ${['左', '中', '右'][S.panelIdx]}片（${S.role === 'master' ? '主控' : '從屬'}）   ` : '')
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
     + (QZS.at && Date.now() - QZS.at < 4000
-         ? `${QZS.watt ? '🚴' : '🏃'} ${(QZS.kmh || 0).toFixed(1)} km/h`
-           + `${QZS.watt ? `  ⚡${QZS.watt}W` : ''}${QZS.heart ? `  ♥${QZS.heart}` : ''}`
-           + `${BTC.g != null ? `  ⛰${BTC.g > 0 ? '+' : ''}${BTC.g.toFixed(1)}%` : ''}   `
+         ? `${QZS.watt != null ? '🚴' : '🏃'} ${(QZS.kmh || 0).toFixed(1)} km/h`
+           + `${QZS.watt != null ? `  ⚡${QZS.watt}W` : ''}`
+           + `${QZS.cad ? `  🔄${Math.round(QZS.cad)}` : ''}`
+           + `${QZS.heart ? `  ♥${QZS.heart}` : ''}`
+           + `${BTC.g != null ? `  ⛰${BTC.g > 0 ? '+' : ''}${BTC.g.toFixed(1)}%` : ''}`
+           + `${BTC.climb ? `  ↗${Math.round(BTC.climb)}m` : ''}`
+           + `${QZS.kcal >= 1 ? `  🔥${Math.round(QZS.kcal)}` : ''}   `
        : xr.session && STK.seen ? `🕹 ${STK.kmh.toFixed(1)} km/h   `
        : xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   `
        : xr.session && HB.at ? `👣 ${HB.kmh.toFixed(1)} km/h   ` : '')
@@ -2096,9 +2100,17 @@ async function btConnect() {
     try { ch = await srv.getCharacteristic(0x2ACD); }
     catch { ch = await srv.getCharacteristic(0x2AD2); isBike = true; }
     await ch.startNotifications();
+    beacon('ftms-conn', { bike: isBike, dev: (dev.name || '').slice(0, 30) });
+    let dbgN = 0;
     ch.addEventListener('characteristicvaluechanged', e => {
       const v = e.target.value;
       const flags = v.getUint16(0, true);
+      // 頭三包回報原始位元組:不同廠牌的旗標組合千奇百怪,遠端 debug 全靠這個
+      if (dbgN < 3) {
+        dbgN++;
+        beacon('ftms-pkt', { flags: flags.toString(16), len: v.byteLength,
+          hex: [...new Uint8Array(v.buffer)].slice(0, 16).map(x => x.toString(16).padStart(2, '0')).join(' ') });
+      }
       if (!isBike) {
         QZS.kmh = v.getUint16(2, true) / 100;
         let o = 4;
@@ -2119,7 +2131,12 @@ async function btConnect() {
         if (flags & 256) o += 5;
         if (flags & 512 && o < v.byteLength) QZS.heart = v.getUint8(o);
       }
-      QZS.at = Date.now();
+      // 卡路里:功率對時間積分,騎行的 kJ ≈ kcal(人體效率抵掉單位換算)
+      const now = Date.now();
+      if (QZS.watt > 0 && QZS.kcalT) QZS.kcal = (QZS.kcal || 0) + QZS.watt * (now - QZS.kcalT) / 1000 / 1000;
+      QZS.kcalT = now;
+      QZS.at = now;
+      if (dbgN < 3) beacon('ftms-parsed', { kmh: QZS.kmh, cad: QZS.cad || 0, watt: QZS.watt || 0 });
     });
     // 自行車台:拿控制權,之後把街景坡度寫回去(上坡踏板變重)
     if (isBike) {
@@ -2173,6 +2190,7 @@ async function slopeTick() {
         }
       }
     }
+    if (BTC.prevPt && e > BTC.prevPt.e) BTC.climb = (BTC.climb || 0) + (e - BTC.prevPt.e);
     BTC.prevPt = { lat: m.lat, lng: m.lng, e };
   } catch {}
 }
