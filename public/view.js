@@ -670,6 +670,7 @@ function drawInner() {
       + (S.mic ? `　🎙${window.__cad?.spm ? Math.round(window.__cad.spm) : '…'}` : '')
       + (S.voice ? `　🗣${voiceState()}` : '')
       + (S.watchLm ? `　👁 盯著 ${S.watchLm.name}` : '')
+      + (qzSeg() ? `　${qzSeg()}` : '')
       // 「跑到○○」之後最想一眼看到的就是還剩幾公尺,收摺列也要有
       + (S.target ? `　⌖ ${S.target.lm ? S.target.lm.name : `第 ${S.targetNo} 點`}`
          + ` ${Math.round(distM(m, S.target))} m`
@@ -699,14 +700,8 @@ function drawInner() {
          + `${Math.round(hHalfDeg() * 2 * S.panels)}°${S.fit ? '　自動比例' : ''}\n`)
     + (S.panelIdx !== null ? `🖥 ${['左', '中', '右'][S.panelIdx]}片（${S.role === 'master' ? '主控' : '從屬'}）   ` : '')
     + `zoom ${S.zoom}   ${S.running ? `▶ ${S.kmh.toFixed(1)} km/h` : '⏸ 停著'}   `
-    + (QZS.at && Date.now() - QZS.at < 4000
-         ? `${QZS.watt != null ? '🚴' : '🏃'} ${(QZS.kmh || 0).toFixed(1)} km/h`
-           + `${QZS.watt != null ? `  ⚡${QZS.watt}W` : ''}`
-           + `${QZS.cad ? `  🔄${Math.round(QZS.cad)}` : ''}`
-           + `${QZS.heart ? `  ♥${QZS.heart}` : ''}`
-           + `${BTC.g != null ? `  ⛰${BTC.g > 0 ? '+' : ''}${BTC.g.toFixed(1)}%` : ''}`
-           + `${BTC.climb ? `  ↗${Math.round(BTC.climb)}m` : ''}`
-           + `${QZS.kcal >= 1 ? `  🔥${Math.round(QZS.kcal)}` : ''}   `
+    + (qzSeg()
+       ? qzSeg()
        : xr.session && STK.seen ? `🕹 ${STK.kmh.toFixed(1)} km/h   `
        : xr.session && VH.seen ? `🖐 ${VH.kmh.toFixed(1)} km/h   `
        : xr.session && HB.at ? `👣 ${HB.kmh.toFixed(1)} km/h   ` : '')
@@ -2083,6 +2078,18 @@ const STK = { kmh: 0, at: 0, seen: false };
 // 4 秒內有新鮮數據就是最高優先的速度來源 —— 藍牙讀出來的真實速度,
 // 比任何用猜的(麥克風/手擺/頭部)都準;斷線自動退回原本機制。
 const QZS = { kmh: null, heart: 0, at: 0 };
+// 器材儀表段(收摺與完整 HUD 共用)—— 之前只放完整版,精簡列沒有,
+// 使用者以為資料不存在(實際反饋,整條 Tacx 偵錯的最後一謎)
+function qzSeg() {
+  if (!QZS.at || Date.now() - QZS.at >= 4000) return '';
+  return `${QZS.watt != null ? '🚴' : '🏃'} ${(QZS.kmh || 0).toFixed(1)} km/h`
+    + `${QZS.watt != null ? `  ⚡${QZS.watt}W` : ''}`
+    + `${QZS.cad ? `  🔄${Math.round(QZS.cad)}` : ''}`
+    + `${QZS.heart ? `  ♥${QZS.heart}` : ''}`
+    + `${BTC.g != null ? `  ⛰${BTC.g > 0 ? '+' : ''}${BTC.g.toFixed(1)}%` : ''}`
+    + `${BTC.climb ? `  ↗${Math.round(BTC.climb)}m` : ''}`
+    + `${QZS.kcal >= 1 ? `  🔥${Math.round(QZS.kcal)}` : ''}   `;
+}
 // ── 跑步機直連(Web Bluetooth / FTMS)────────────────────────
 // 跑步機講的是標準 FTMS 協定,Chrome 可以直接連,不用任何中間 app
 //(QZ 那條路留給 VR:Quest 瀏覽器沒有 Web Bluetooth)。
