@@ -2092,7 +2092,8 @@ async function btConnect() {
   try {
     const dev = await navigator.bluetooth.requestDevice({
       filters: [{ services: ['fitness_machine'] }],
-      optionalServices: ['heart_rate'] });
+      optionalServices: ['heart_rate', 'cycling_power',
+        '6e40fec1-b5a3-f393-e0a9-e50e24dcca9e'] });   // Tacx FE-C over BLE(私有)
     const srv = await (await dev.gatt.connect()).getPrimaryService('fitness_machine');
     // 跑步機(0x2ACD Treadmill Data)或自行車台(0x2AD2 Indoor Bike Data),
     // 有哪個聽哪個
@@ -2133,16 +2134,121 @@ async function btConnect() {
       }
       // 卡路里:功率對時間積分,騎行的 kJ ≈ kcal(人體效率抵掉單位換算)
       const now = Date.now();
+      if (QZS.kmh > 0.5) QZS.ftmsAt = now;   // FTMS 速度活著的證明
       if (QZS.watt > 0 && QZS.kcalT) QZS.kcal = (QZS.kcal || 0) + QZS.watt * (now - QZS.kcalT) / 1000 / 1000;
       QZS.kcalT = now;
       QZS.at = now;
-      if (dbgN < 3) beacon('ftms-parsed', { kmh: QZS.kmh, cad: QZS.cad || 0, watt: QZS.watt || 0 });
+      if (!QZS.logAt || now - QZS.logAt > 5000) {
+        QZS.logAt = now;
+        beacon('ftms-live', { kmh: +(QZS.kmh || 0).toFixed(1), cad: Math.round(QZS.cad || 0),
+          watt: QZS.watt || 0,
+          hex: [...new Uint8Array(v.buffer)].slice(0, 12).map(x => x.toString(16).padStart(2, '0')).join(' ') });
+      }
+      // 老 Flux 的 FTMS 是空殼(恆為零),真資料走功率計服務 ——
+      // CPS 活著時,FTMS 的零包不准蓋台
+      if (CPS.on && !QZS.kmh && !QZS.watt) { QZS.kmh = CPS.kmh || 0; QZS.watt = CPS.watt || 0; QZS.cad = CPS.cad || 0; }
     });
+    // Tacx FE-C over BLE(私有通道):初代 Flux 的標準通道只有速度,
+    // 功率/踏頻/坡度控制全走這條(Zwift 對老 Tacx 就是這樣講話的)。
+    // 封包=ANT 訊框:A4 len 4E/4F ch payload×8 chk(XOR)。
+    // 頁16=速度(0.001m/s),頁25=踏頻+功率(12bit),頁51=坡度控制。
+    try {
+      const tsrv = await dev.gatt.getPrimaryService('6e40fec1-b5a3-f393-e0a9-e50e24dcca9e');
+      FEC.tx = await tsrv.getCharacteristic('6e40fec2-b5a3-f393-e0a9-e50e24dcca9e');
+      const rx = await tsrv.getCharacteristic('6e40fec3-b5a3-f393-e0a9-e50e24dcca9e');
+      await rx.startNotifications();
+      rx.addEventListener('characteristicvaluechanged', e => {
+        const b = new Uint8Array(e.target.value.buffer);
+        for (let i = 0; i + 4 <= b.length; i++) {
+          if (b[i] !== 0xA4) continue;
+          const len = b[i + 1], type = b[i + 2];
+          if (i + len + 4 > b.length) break;
+          if ((type === 0x4E || type === 0x4F) && len >= 9) {
+            const p2 = b.slice(i + 4, i + 4 + 8);      // channel 後的 8 bytes
+            if (p2[0] === 0x10) {                       // 頁16:一般資料
+              const mps = (p2[4] | (p2[5] << 8)) * 0.001;
+              if (mps < 30) { FEC.kmh = mps * 3.6; }
+            } else if (p2[0] === 0x19) {                // 頁25:踏頻+功率
+              if (p2[2] !== 0xFF) FEC.cad = p2[2];
+              const w = p2[5] | ((p2[6] & 0x0F) << 8);
+              if (w !== 0xFFF) FEC.watt = w;
+            }
+            FEC.on = true; FEC.at = Date.now();
+            QZS.watt = FEC.watt ?? QZS.watt;
+            QZS.cad = FEC.cad ?? QZS.cad;
+            if (!QZS.ftmsAt || Date.now() - QZS.ftmsAt > 3000)
+              QZS.kmh = FEC.kmh ?? QZS.kmh;             // FTMS 速度活著就讓它主導
+            QZS.at = Date.now();
+          }
+          i += len + 3;
+        }
+        if (!FEC.logAt || Date.now() - FEC.logAt > 5000) {
+          FEC.logAt = Date.now();
+          beacon('fec-live', { kmh: +(FEC.kmh || 0).toFixed(1), cad: FEC.cad ?? -1,
+            watt: FEC.watt ?? -1,
+            hex: [...b].slice(0, 13).map(x => x.toString(16).padStart(2, '0')).join(' ') });
+        }
+      });
+      beacon('fec-conn', {});
+    } catch { beacon('fec-none', {}); }
+    // 功率計服務(0x1818/0x2A63):老 Tacx 的 FTMS 是空殼,真資料在這。
+    // 功率直讀;速度=輪轉數×輪周(2.096m)/時間;踏頻=曲柄轉/時間
+    try {
+      const psrv = await dev.gatt.getPrimaryService('cycling_power');
+      const pch = await psrv.getCharacteristic(0x2A63);
+      await pch.startNotifications();
+      let cpsDbg = 0;
+      pch.addEventListener('characteristicvaluechanged', e => {
+        const v = e.target.value;
+        const fl = v.getUint16(0, true);
+        CPS.watt = v.getInt16(2, true);
+        let o = 4;
+        if (fl & 1) o += 1;                      // 踏板平衡
+        if (fl & 4) o += 2;                      // 累積扭矩
+        if (fl & 16) {                           // 輪轉:u32 圈數 + u16 時刻(1/2048s)
+          const revs = v.getUint32(o, true), t = v.getUint16(o + 4, true); o += 6;
+          if (CPS.lr != null && t !== CPS.lt) {
+            const dr = (revs - CPS.lr) >>> 0;
+            const dt = ((t - CPS.lt + 65536) % 65536) / 2048;
+            if (dt > 0 && dr < 100) CPS.kmh = dr * 2.096 / dt * 3.6;
+          }
+          CPS.lr = revs; CPS.lt = t;
+        }
+        if (fl & 32) {                           // 曲柄:u16 圈數 + u16 時刻(1/1024s)
+          const cr = v.getUint16(o, true), ct = v.getUint16(o + 2, true);
+          if (CPS.lcr != null && ct !== CPS.lct) {
+            const dcr = (cr - CPS.lcr + 65536) % 65536;
+            const dt = ((ct - CPS.lct + 65536) % 65536) / 1024;
+            if (dt > 0 && dcr < 20) CPS.cad = dcr / dt * 60;
+          }
+          CPS.lcr = cr; CPS.lct = ct;
+        }
+        CPS.on = true;
+        // 初代 Flux 的 CPS 是殭屍(計數凍結),FTMS 速度活著或 FE-C 在場時
+        // 不讓它蓋台(實測 20km/h 被它的 0.9 攪局)
+        if (!FEC.on && Date.now() - (QZS.ftmsAt || 0) > 3000) {
+          QZS.kmh = CPS.kmh || 0; QZS.watt = CPS.watt; QZS.cad = CPS.cad || 0;
+        }
+        QZS.at = Date.now();
+        // 每 5 秒回報一次現值(不只頭三包 —— 那時人還沒開始踩,全是零)
+        if (!CPS.logAt || Date.now() - CPS.logAt > 5000) {
+          CPS.logAt = Date.now();
+          beacon('cps-live', { fl: fl.toString(16), watt: CPS.watt,
+            kmh: +(CPS.kmh || 0).toFixed(1), cad: Math.round(CPS.cad || 0),
+            hex: [...new Uint8Array(v.buffer)].slice(0, 14).map(x => x.toString(16).padStart(2, '0')).join(' ') });
+        }
+      });
+      beacon('cps-conn', {});
+    } catch { beacon('cps-none', {}); }
     // 自行車台:拿控制權,之後把街景坡度寫回去(上坡踏板變重)
     if (isBike) {
       try {
         BTC.ctrl = await srv.getCharacteristic(0x2AD9);   // Fitness Machine Control Point
         await BTC.ctrl.writeValue(new Uint8Array([0x00])); // Request Control
+        // Tacx 的脾氣:拿了控制權還要送「開始訓練」(0x07)它才開始
+        // 播報數據 —— 實測沒送的話封包永遠全零(Zwift/QZ 都會送這發)
+        await new Promise(r2 => setTimeout(r2, 300));
+        await BTC.ctrl.writeValue(new Uint8Array([0x07])).catch(() => {});
         S.note = T('🚴 練習台已連上,坡度連動啟用', '🚴 Trainer connected — terrain sim on');
       } catch { S.note = T('🚴 已連上(這台不支援坡度控制)', '🚴 Connected (no slope control)'); }
     } else {
@@ -2163,6 +2269,8 @@ async function btConnect() {
 // 坡度連動:每換一顆全景,查兩點海拔差 ÷ 距離 = 坡度%,平滑後寫回練習台。
 // FTMS「模擬參數」指令:0x11 + 風速 i16(0) + 坡度 i16(0.01%) + 滾阻 u8 + 風阻 u8
 const BTC = { ctrl: null, g: null, lastSent: null, prevPt: null, lastId: null };
+const CPS = { on: false, watt: null, kmh: null, cad: null, lr: null, lt: null, lcr: null, lct: null };
+const FEC = { on: false, tx: null, kmh: null, cad: null, watt: null, at: 0 };
 async function slopeTick() {
   const m = S.cur?.meta;
   if (!m || m.pano === BTC.lastId) return;
@@ -2178,14 +2286,23 @@ async function slopeTick() {
       if (d > 3) {
         const raw = Math.max(-12, Math.min(12, (e - BTC.prevPt.e) / d * 100));
         BTC.g = BTC.g == null ? raw : BTC.g * 0.4 + raw * 0.6;   // 平滑
-        if (BTC.ctrl && (BTC.lastSent == null || Math.abs(BTC.g - BTC.lastSent) > 0.2)) {
-          const buf = new DataView(new ArrayBuffer(7));
-          buf.setUint8(0, 0x11);
-          buf.setInt16(1, 0, true);                         // 風速 0
-          buf.setInt16(3, Math.round(BTC.g * 100), true);   // 坡度(0.01%)
-          buf.setUint8(5, 40);                              // 滾動阻力 0.004
-          buf.setUint8(6, 51);                              // 風阻 0.51
-          await BTC.ctrl.writeValue(buf.buffer);
+        if ((BTC.ctrl || FEC.tx) && (BTC.lastSent == null || Math.abs(BTC.g - BTC.lastSent) > 0.2)) {
+          if (FEC.tx) {
+            // FE-C 頁51(Track Resistance):坡度 u16 = (坡度%+200)×100
+            const g16 = Math.round((BTC.g + 200) * 100);
+            const pl = [0x33, 0xFF, 0xFF, 0xFF, 0xFF, g16 & 0xFF, (g16 >> 8) & 0xFF, 80];
+            const fr = [0xA4, 0x09, 0x4F, 0x05, ...pl];
+            fr.push(fr.reduce((x, y) => x ^ y, 0));
+            await FEC.tx.writeValue(new Uint8Array(fr)).catch(() => {});
+          } else {
+            const buf = new DataView(new ArrayBuffer(7));
+            buf.setUint8(0, 0x11);
+            buf.setInt16(1, 0, true);
+            buf.setInt16(3, Math.round(BTC.g * 100), true);
+            buf.setUint8(5, 40);
+            buf.setUint8(6, 51);
+            await BTC.ctrl.writeValue(buf.buffer);
+          }
           BTC.lastSent = BTC.g;
         }
       }
