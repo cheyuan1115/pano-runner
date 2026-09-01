@@ -965,6 +965,86 @@ else: print('NONE')`;
           error: okUp ? undefined : '已存檔;上傳結果未確認,必要時手動拖 strava.com/upload' });
       } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
     }
+    // ── Garmin Connect 上傳(同 Strava 的自動化分身招式)──────
+    // 免 API:專用 profile 登入一次,CDP 操作 import-data 頁塞 TCX。
+    // 加碼:使用者的 Garmin↔Strava 已連動,傳 Garmin 會自動同步 Strava。
+    if (u.pathname === '/garmin/weblogin') {
+      const { spawn } = await import('node:child_process');
+      spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        ['--user-data-dir=' + join(process.env.HOME, '.keys', 'garmin-chrome'),
+         '--no-first-run', '--no-default-browser-check', '--window-size=1000,760',
+         'https://connect.garmin.com/signin'], { detached: true, stdio: 'ignore' }).unref();
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end('<body style="font:19px sans-serif;padding:40px;background:#111;color:#eee">'
+        + '開了專用瀏覽器 —— 登入 Garmin Connect(記住我),完成後關掉那個視窗。</body>');
+    }
+    if (u.pathname === '/api/garmin/webupload' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 5e6) break; }
+      try {
+        const { tcx, ride } = JSON.parse(body);
+        const dir = join(process.env.HOME, 'pano-runs');
+        await mkdir(dir, { recursive: true });
+        const d = new Date();
+        const fname = `pano-${ride ? 'ride' : 'run'}-${d.getMonth() + 1}-${d.getDate()}-`
+          + `${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}.tcx`;
+        const fpath = join(dir, fname);
+        await writeFile(fpath, tcx);
+        const { spawn, execSync } = await import('node:child_process');
+        try { execSync('pkill -f garmin-chrome'); await new Promise(r2 => setTimeout(r2, 800)); } catch {}
+        spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          ['--user-data-dir=' + join(process.env.HOME, '.keys', 'garmin-chrome'),
+           '--remote-debugging-port=9334', '--no-first-run', '--no-default-browser-check',
+           '--window-size=980,720', '--window-position=2000,100',
+           'https://connect.garmin.com/modern/import-data'], { detached: true, stdio: 'ignore' }).unref();
+        let target = null;
+        for (let i = 0; i < 50 && !target; i++) {
+          await new Promise(r2 => setTimeout(r2, 500));
+          try {
+            const list = await (await fetch('http://127.0.0.1:9334/json')).json();
+            target = list.find(t => t.type === 'page' && t.url.includes('garmin'));
+          } catch {}
+        }
+        if (!target) throw new Error('自動化瀏覽器沒起來');
+        const ws = new WebSocket(target.webSocketDebuggerUrl);
+        let mid = 0; const pend = new Map();
+        ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } };
+        await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = no; });
+        const send = (m2, p2 = {}) => new Promise(r2 => { const i = ++mid; pend.set(i, r2); ws.send(JSON.stringify({ id: i, method: m2, params: p2 })); });
+        const evl = async x => (await send('Runtime.evaluate', { expression: x, returnByValue: true })).result?.result?.value;
+        await send('Runtime.enable'); await send('DOM.enable'); await send('Page.enable');
+        let nodeId = 0, needLogin = false;
+        for (let i = 0; i < 40; i++) {
+          await new Promise(r2 => setTimeout(r2, 700));
+          const urlNow = await evl('location.href') || '';
+          if (/signin|sso/.test(urlNow)) { needLogin = true; break; }
+          const doc = await send('DOM.getDocument');
+          const q = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: 'input[type=file]' });
+          if (q.result?.nodeId) { nodeId = q.result.nodeId; break; }
+        }
+        if (needLogin) { console.log('Garmin 上傳:未登入'); execSync('pkill -f garmin-chrome || true'); return json(res, { saved: fname, error: '先開 /garmin/weblogin 登入一次' }); }
+        if (!nodeId) { console.log('Garmin 上傳:找不到檔案輸入框'); execSync('pkill -f garmin-chrome || true'); return json(res, { saved: fname, error: '找不到上傳框(Garmin 改版?)' }); }
+        await send('DOM.setFileInputFiles', { files: [fpath], nodeId });
+        // Garmin 的匯入頁要再按「匯入資料/Import Data」
+        await new Promise(r2 => setTimeout(r2, 1500));
+        await evl(`(() => {
+          const btns = [...document.querySelectorAll('button')];
+          const b = btns.find(x => /匯入|Import/i.test(x.textContent));
+          if (b) { b.click(); return 'clicked'; } return 'nobtn'; })()`);
+        let okUp = false;
+        for (let i = 0; i < 40; i++) {
+          await new Promise(r2 => setTimeout(r2, 1000));
+          const t2 = await evl("document.body.innerText.slice(0,3000)") || '';
+          if (/已匯入|匯入成功|Imported|successfully|檢視詳細/i.test(t2)) { okUp = true; break; }
+          if (/失敗|error|failed|重複|duplicate/i.test(t2)) break;
+        }
+        await new Promise(r2 => setTimeout(r2, 2500));
+        execSync('pkill -f garmin-chrome || true');
+        console.log('Garmin 網頁上傳:', fname, okUp ? 'OK' : '未確認');
+        return json(res, { ok: okUp ? 1 : 0, saved: fname,
+          error: okUp ? undefined : '已存檔;上傳結果未確認' });
+      } catch (e) { return json(res, { error: String(e.message || e) }, 502); }
+    }
     if (u.pathname === '/strava/auth') {
       try {
         const cfg = JSON.parse(await readFile(join(process.env.HOME, '.keys', 'strava'), 'utf8'));

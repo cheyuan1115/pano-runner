@@ -1418,11 +1418,17 @@ async function stravaUpload() {
     const rode = S.track.some(p => p.w > 0);
     const tcx = buildTCX(S.track, rode ? 'Biking' : 'Running');
     S.note = '⬆ Strava…'; draw();
-    const r = await (await fetch('/api/strava/webupload', { method: 'POST',
+    // Garmin 為主(使用者的 Garmin↔Strava 已連動,一傳兩平台);
+    // Garmin 沒登入則退回 Strava 網頁自動化
+    let r = await (await fetch('/api/garmin/webupload', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tcx, ride: rode }),
       signal: AbortSignal.timeout(90000) })).json();
-    S.note = r.ok ? T('⬆ 已上傳 Strava ✓', '⬆ Uploaded to Strava ✓')
+    if (r.error && /登入/.test(r.error)) r = await (await fetch('/api/strava/webupload', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tcx, ride: rode }),
+      signal: AbortSignal.timeout(90000) })).json();
+    S.note = r.ok ? T('⬆ 已上傳 Garmin(自動同步 Strava)✓', '⬆ Uploaded ✓')
           : r.saved ? T(`💾 已存 ${r.saved}(${r.error || ''})`, `💾 Saved ${r.saved} (${r.error || ''})`)
           : '⬆ ' + (r.error || '失敗');
     S.noteHold = Date.now() + 15000;
