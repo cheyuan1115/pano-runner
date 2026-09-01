@@ -947,8 +947,8 @@ else: print('NONE')`;
           const q = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: 'input[type=file]' });
           if (q.result?.nodeId) { nodeId = q.result.nodeId; break; }
         }
-        if (needLogin) { execSync('pkill -f strava-chrome || true'); return json(res, { saved: fname, error: '先開 /strava/weblogin 登入一次' }); }
-        if (!nodeId) { execSync('pkill -f strava-chrome || true'); return json(res, { saved: fname, error: '找不到上傳框(Strava 改版?)' }); }
+        if (needLogin) { console.log('Strava 上傳:未登入'); execSync('pkill -f strava-chrome || true'); return json(res, { saved: fname, error: '先開 /strava/weblogin 登入一次' }); }
+        if (!nodeId) { console.log('Strava 上傳:找不到檔案輸入框'); execSync('pkill -f strava-chrome || true'); return json(res, { saved: fname, error: '找不到上傳框(Strava 改版?)' }); }
         await send('DOM.setFileInputFiles', { files: [fpath], nodeId });
         // 等處理:成功時頁面會出現活動編輯列或跳轉
         let okUp = false;

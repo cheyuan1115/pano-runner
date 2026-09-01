@@ -1359,6 +1359,10 @@ function trackPoint(meta) {
   if (BTC.prevPt?.e != null) pt.e = BTC.prevPt.e;
   if (QZS.at && Date.now() - QZS.at < 4000) {
     if (QZS.heart) pt.h = QZS.heart;
+  }
+  {
+    const bpm = (HR.at && Date.now() - HR.at < 5000) ? HR.bpm : 0;
+    if (bpm) pt.h = bpm;                     // 手錶心率優先(通常比器材橋接的準)
     if (QZS.watt != null) pt.w = QZS.watt;
     if (QZS.cad) pt.c = Math.round(QZS.cad);
   }
@@ -2128,11 +2132,13 @@ const QZS = { kmh: null, heart: 0, at: 0 };
 // 器材儀表段(收摺與完整 HUD 共用)—— 之前只放完整版,精簡列沒有,
 // 使用者以為資料不存在(實際反饋,整條 Tacx 偵錯的最後一謎)
 function qzSeg() {
-  if (!QZS.at || Date.now() - QZS.at >= 4000) return '';
+  const bpm = (HR.at && Date.now() - HR.at < 5000) ? HR.bpm : QZS.heart;
+  if (!QZS.at || Date.now() - QZS.at >= 4000)
+    return bpm ? `♥${bpm}   ` : '';          // 只連手錶沒連器材:單獨顯示心率
   return `${QZS.watt != null ? '🚴' : '🏃'} ${(QZS.kmh || 0).toFixed(1)} km/h`
     + `${QZS.watt != null ? `  ⚡${QZS.watt}W` : ''}`
     + `${QZS.cad ? `  🔄${Math.round(QZS.cad)}` : ''}`
-    + `${QZS.heart ? `  ♥${QZS.heart}` : ''}`
+    + `${bpm ? `  ♥${bpm}` : ''}`
     + `${BTC.g != null ? `  ⛰${BTC.g > 0 ? '+' : ''}${BTC.g.toFixed(1)}%` : ''}`
     + `${BTC.climb ? `  ↗${Math.round(BTC.climb)}m` : ''}`
     + `${QZS.kcal >= 1 ? `  🔥${Math.round(QZS.kcal)}` : ''}   `;
@@ -2327,6 +2333,36 @@ async function btConnect() {
 // FTMS「模擬參數」指令:0x11 + 風速 i16(0) + 坡度 i16(0.01%) + 滾阻 u8 + 風阻 u8
 const BTC = { ctrl: null, g: null, lastSent: null, prevPt: null, lastId: null };
 const CPS = { on: false, watt: null, kmh: null, cad: null, lr: null, lt: null, lcr: null, lct: null };
+// 獨立心率來源(Garmin 錶的廣播心率=標準 BLE 心率服務)。
+// 刻意不碰 QZS.at —— 心率不該啟動「器材速度接管」,只是補一欄數據
+const HR = { bpm: 0, at: 0 };
+async function hrConnect() {
+  try {
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [{ services: ['heart_rate'] }] });
+    const srv = await (await dev.gatt.connect()).getPrimaryService('heart_rate');
+    const ch = await srv.getCharacteristic(0x2A37);   // Heart Rate Measurement
+    await ch.startNotifications();
+    ch.addEventListener('characteristicvaluechanged', e => {
+      const v = e.target.value;
+      // 旗標 bit0:0=u8、1=u16 的心率值
+      HR.bpm = (v.getUint8(0) & 1) ? v.getUint16(1, true) : v.getUint8(1);
+      HR.at = Date.now();
+    });
+    const b = document.getElementById('hrbtn');
+    if (b) b.style.display = 'none';
+    S.note = T(`♥ 心率已連(${(dev.name || '').slice(0, 20)})`, `♥ HR connected (${(dev.name || '').slice(0, 20)})`);
+    dev.addEventListener('gattserverdisconnected', () => {
+      HR.at = 0;
+      if (b) b.style.display = 'block';
+      S.note = T('♥ 心率斷線', '♥ HR disconnected');
+    });
+  } catch (e) {
+    if (String(e).includes('cancel')) return;
+    S.note = '♥ ' + String(e.message || e).slice(0, 50);
+  }
+}
+window.hrConnect = hrConnect;
 const FEC = { on: false, tx: null, kmh: null, cad: null, watt: null, at: 0 };
 async function slopeTick() {
   const m = S.cur?.meta;
@@ -2378,6 +2414,11 @@ setTimeout(() => {
   if (b && navigator.bluetooth) {
     b.style.display = 'block';
     if (EN_UI) b.textContent = '🚴 Connect trainer';
+  }
+  const b2 = document.getElementById('hrbtn');
+  if (b2 && navigator.bluetooth) {
+    b2.style.display = 'block';
+    if (EN_UI) b2.textContent = '♥ Connect HR (watch)';
   }
 }, 1500);
 setInterval(async () => {
