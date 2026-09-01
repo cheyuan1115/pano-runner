@@ -2103,7 +2103,7 @@ async function aiGuide(subject = null) {
       if (!j.text) return { j };
       const lines = (j.text.match(EN_UI ? /[^。！？.!?]+[。！？.!?]?/g : /[^。！？!?]+[。！？!?]?/g) || [j.text])
         .map(t => t.trim()).filter(t => t.length > 1);
-      const lm = { id: 'ai:' + Date.now(), name: T('AI 導覽', 'AI Guide'), lat: m.lat, lng: m.lng,
+      const lm = { id: 'ai:' + Date.now(), name: subject || T('AI 導覽', 'AI Guide'), lat: m.lat, lng: m.lng,
                    script: j.text, lines, marks: [],
                    photos: j.photos || [], audio: '' };   // 指名介紹會帶維基/Places 查到的照片
       await ttsFor(lm).catch(() => {});
@@ -2909,7 +2909,17 @@ async function maybeNarrate(meta) {
     const d = distM(meta, S.target);
     if (d < S.bestToTarget - 5) { S.bestToTarget = d; S.bestAt = S.moved; }
     if (S.speaking) return;
-    if (d < 90) { endDetour(); lm.ai ? aiGuide() : speak(lm); return; }
+    if (d < 90) {
+      // 抵達要明確宣告(實際反饋:沒稿子的目的地只叮一聲,不知道到了沒)。
+      // 有預備講稿的直接開講;沒稿子的(OSM 店家、維基搜來的無稿景點)
+      // 改用「指名介紹」—— 帶著景點名去生稿+搜照片,比泛泛看畫面介紹準。
+      endDetour();
+      S.note = T(`⌖ 到了,${lm.name}`, `⌖ Arrived: ${lm.name}`);
+      S.noteHold = Date.now() + 15000; draw();
+      if (lm.lines && lm.lines.length || lm.script) speak(lm);
+      else { chime(); aiGuide(lm.name); }
+      return;
+    }
     // 放寬到 600 公尺沒「進步」才放棄 —— 景點常常要繞過街廓才到得了
     if (S.moved - S.bestAt > 600) {
       // 棄標是重大狀態轉換:叮一聲+訊息鎖 15 秒,不能像例行提示一閃而過
