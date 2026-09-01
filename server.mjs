@@ -905,15 +905,15 @@ else: print('NONE')`;
       let body = '';
       for await (const c of req) { body += c; if (body.length > 5e6) break; }
       try {
-        const { tcx, ride } = JSON.parse(body);
+        const { tcx, fitB64, ride } = JSON.parse(body);
         // 1) 落地存檔(無論上傳成敗,紀錄都在)
         const dir = join(process.env.HOME, 'pano-runs');
         await mkdir(dir, { recursive: true });
         const d = new Date();
         const fname = `pano-${ride ? 'ride' : 'run'}-${d.getMonth() + 1}-${d.getDate()}-`
-          + `${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}.tcx`;
+          + `${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}.${fitB64 ? 'fit' : 'tcx'}`;
         const fpath = join(dir, fname);
-        await writeFile(fpath, tcx);
+        await writeFile(fpath, fitB64 ? Buffer.from(fitB64, 'base64') : tcx);
         // 2) CDP 操作專用 Chrome 上傳
         const { spawn, execSync } = await import('node:child_process');
         try { execSync('pkill -f strava-chrome'); await new Promise(r2 => setTimeout(r2, 800)); } catch {}
@@ -982,14 +982,14 @@ else: print('NONE')`;
       let body = '';
       for await (const c of req) { body += c; if (body.length > 5e6) break; }
       try {
-        const { tcx, ride } = JSON.parse(body);
+        const { tcx, fitB64, ride } = JSON.parse(body);
         const dir = join(process.env.HOME, 'pano-runs');
         await mkdir(dir, { recursive: true });
         const d = new Date();
         const fname = `pano-${ride ? 'ride' : 'run'}-${d.getMonth() + 1}-${d.getDate()}-`
-          + `${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}.tcx`;
+          + `${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}.${fitB64 ? 'fit' : 'tcx'}`;
         const fpath = join(dir, fname);
-        await writeFile(fpath, tcx);
+        await writeFile(fpath, fitB64 ? Buffer.from(fitB64, 'base64') : tcx);
         const { spawn, execSync } = await import('node:child_process');
         try { execSync('pkill -f garmin-chrome'); await new Promise(r2 => setTimeout(r2, 800)); } catch {}
         spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',

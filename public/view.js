@@ -1416,17 +1416,21 @@ async function stravaUpload() {
   // 自動化 Chrome 分身代拖 strava.com/upload(要先 /strava/weblogin 登入一次)
   try {
     const rode = S.track.some(p => p.w > 0);
-    const tcx = buildTCX(S.track, rode ? 'Biking' : 'Running');
+    // FIT 格式才標得了 sub_sport=虛擬活動 → Garmin 顯示「虛擬跑步/騎行」、Strava 同步成 VirtualRun/Ride
+    const fit = buildFIT(S.track, rode);
+    let fitB64 = ''; for (let i = 0; i < fit.length; i += 8192)
+      fitB64 += String.fromCharCode.apply(null, fit.subarray(i, i + 8192));
+    fitB64 = btoa(fitB64);
     S.note = '⬆ Strava…'; draw();
     // Garmin 為主(使用者的 Garmin↔Strava 已連動,一傳兩平台);
     // Garmin 沒登入則退回 Strava 網頁自動化
     let r = await (await fetch('/api/garmin/webupload', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tcx, ride: rode }),
+      body: JSON.stringify({ fitB64, ride: rode }),
       signal: AbortSignal.timeout(90000) })).json();
     if (r.error && /登入/.test(r.error)) r = await (await fetch('/api/strava/webupload', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tcx, ride: rode }),
+      body: JSON.stringify({ fitB64, ride: rode }),
       signal: AbortSignal.timeout(90000) })).json();
     S.note = r.ok ? T('⬆ 已上傳 Garmin(自動同步 Strava)✓', '⬆ Uploaded ✓')
           : r.saved ? T(`💾 已存 ${r.saved}(${r.error || ''})`, `💾 Saved ${r.saved} (${r.error || ''})`)
