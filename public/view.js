@@ -2847,6 +2847,33 @@ async function gotoLm(text) {
   detourTo(items[0]);                       // 已按距離排序,取最近的那個
 }
 
+// 「介紹○○」的前置比對:先確認○○是真實存在的景點,才讓 AI 開講。
+// 不比對的話,聽錯的名字會讓 AI 憑空編介紹、Places 配到不知哪裡的照片(實際反饋)。
+// 比對層跟「跑到」同一套:維基景點(15km)→ OSM 地圖(店家、車站這種沒維基條目的)。
+// 比對到就改用「正式名稱」去搜照片+生稿,聽寫的別名(聖母院)換成全名(巴黎聖母院),命中率高一截。
+async function aiAbout(subject) {
+  const m = S.cur?.meta; if (!m) return;
+  S.note = T(`⌖ 比對景點「${subject}」…`, `⌖ Matching "${subject}"…`); draw();
+  let items = [];
+  try {
+    const r = await fetch(`/api/nearby?ll=${m.lat},${m.lng}&r=15000&q=${encodeURIComponent(subject)}`,
+      { signal: AbortSignal.timeout(8000) });
+    items = (await r.json()).items || [];
+  } catch {}
+  if (!items.length) {
+    try {
+      const r = await fetch(`/api/findplace?ll=${m.lat},${m.lng}&q=${encodeURIComponent(subject)}`,
+        { signal: AbortSignal.timeout(20000) });
+      items = (await r.json()).items || [];
+    } catch {}
+  }
+  if (!items.length) {
+    S.note = T(`⚠ 沒找到景點「${subject}」`, `⚠ No landmark found: "${subject}"`);
+    S.noteHold = Date.now() + 8000; draw(); return;
+  }
+  aiGuide(items[0].name || subject);
+}
+
 // 繞路結束（到了或到不了）—— 回到原本的目標
 function endDetour() {
   S.target = S.detourFrom;
@@ -3062,7 +3089,7 @@ window.__turn = (cmd, text) => {
     // 泛指詞不當主角:「介紹這附近」其實是要看畫面介紹 ——
     // 拿「這附近」去搜 Places 會撈到不知哪裡的店(實測撈到台灣市場的照片)
     const generic = /^(這裡|這邊|這附近|這個|這一帶|附近|周圍|四周|眼前|前面|那個|那裡|here|this place|this area|around here)$/;
-    if (subject && !generic.test(subject)) aiGuide(subject);
+    if (subject && !generic.test(subject)) aiAbout(subject);
     else aiGuide();
     return;
   }
