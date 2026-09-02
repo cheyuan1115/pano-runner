@@ -422,7 +422,9 @@ function tileWindow(meta, heading) {
   const cols = Math.ceil(g.w / TS), rows = Math.ceil(g.h / TS);
   // VR 抓整圈 —— 頭會轉到任何方向，只抓行進方向那一帶的話，
   // 側面和後面落在 zoom2 的底圖上，一轉頭就是糊的。
-  const spanDeg = xr.session ? 360
+  // 播報中也抓整圈:視角盯著景點,只抓景點那一帶的話,播完轉回
+  // 行進方向就是低清底圖,要等好幾顆才恢復(實際反饋:介紹完糊好幾秒)。
+  const spanDeg = (xr.session || S.watchLm) ? 360
     : S.proj === 'pan'
     ? Math.min(360, S.span + 30)
     : Math.min(360, hHalfDeg() * 2 * S.panels + 30);
