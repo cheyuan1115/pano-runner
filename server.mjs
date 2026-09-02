@@ -910,21 +910,17 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
     // 不在 → ^G 開面板 + 1.3 秒後點輸入框右下的聲波鈕進語音模式。
     // 懸浮窗會移動,座標一律即時查(CGWindowList),不寫死。
     // 需要:同一台機器、輔助使用權限、cliclick、python3+pyobjc。
-    // Gemini Live 浮窗還在嗎?(自家語音暫停中要靠這個自動解除 ——
-    // 使用者用滑鼠點 ✕ 關掉的話,沒有任何事件告訴我們)
+    // Gemini Live 巡邏:在不在?暫停了沒?(「聽取中」實測幾分鐘內就會
+    // 自己變「已暫停」,跑步中看不到浮窗 —— 這就是「Gemini 都聽不到」的真相。
+    // tools/gem-status.py 用 OCR 讀狀態,暫停就按波形鈕救回)
     if (u.pathname === '/api/gemini/status') {
       try {
         const { execFile } = await import('node:child_process');
-        const out = await new Promise((ok, no) => execFile('python3', ['-c', `
-import Quartz
-wl = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
-for w in wl:
-    if 'Chrome' in w.get('kCGWindowOwnerName','') and w.get('kCGWindowLayer',0) > 0:
-        b = w['kCGWindowBounds']
-        if 250 < b['Width'] < 600 and 80 < b['Height'] < 300:
-            print('ON'); break
-else: print('OFF')`], (e, o) => e ? no(e) : ok((o || '').trim())));
-        return json(res, { on: out === 'ON' });
+        const out = await new Promise((ok, no) => execFile('python3',
+          [join(fileURLToPath(new URL('.', import.meta.url)), 'tools', 'gem-status.py')],
+          { timeout: 15000 }, (e, o) => e ? no(e) : ok((o || '').trim())));
+        if (out === 'RESUMED') console.log('Gemini Live 自暫停,已按回聽取');
+        return json(res, { on: out !== 'NONE', state: out });
       } catch (e) { return json(res, { on: false, error: String(e.message || e).slice(0, 60) }); }
     }
     if (u.pathname === '/api/gemini') {
