@@ -910,6 +910,23 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
     // 不在 → ^G 開面板 + 1.3 秒後點輸入框右下的聲波鈕進語音模式。
     // 懸浮窗會移動,座標一律即時查(CGWindowList),不寫死。
     // 需要:同一台機器、輔助使用權限、cliclick、python3+pyobjc。
+    // Gemini Live 浮窗還在嗎?(自家語音暫停中要靠這個自動解除 ——
+    // 使用者用滑鼠點 ✕ 關掉的話,沒有任何事件告訴我們)
+    if (u.pathname === '/api/gemini/status') {
+      try {
+        const { execFile } = await import('node:child_process');
+        const out = await new Promise((ok, no) => execFile('python3', ['-c', `
+import Quartz
+wl = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
+for w in wl:
+    if 'Chrome' in w.get('kCGWindowOwnerName','') and w.get('kCGWindowLayer',0) > 0:
+        b = w['kCGWindowBounds']
+        if 250 < b['Width'] < 600 and 80 < b['Height'] < 300:
+            print('ON'); break
+else: print('OFF')`], (e, o) => e ? no(e) : ok((o || '').trim())));
+        return json(res, { on: out === 'ON' });
+      } catch (e) { return json(res, { on: false, error: String(e.message || e).slice(0, 60) }); }
+    }
     if (u.pathname === '/api/gemini') {
       try {
         const { execFile } = await import('node:child_process');

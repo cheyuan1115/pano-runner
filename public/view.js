@@ -3097,8 +3097,33 @@ async function lateralHop(side) {
   } finally { hopping = false; }
 }
 
+// Gemini Live 開關連動的語音閘門。開著時每 5 秒確認浮窗還在 ——
+// 用滑鼠點 ✕ 關掉的話沒有事件,不巡的話語音會永遠卡在暫停。
+const GG = { on: false, timer: 0 };
+function geminiGate(on) {
+  GG.on = on;
+  clearInterval(GG.timer);
+  if (on) GG.timer = setInterval(async () => {
+    try {
+      const j = await (await fetch('/api/gemini/status',
+        { signal: AbortSignal.timeout(4000) })).json();
+      if (!j.on) {
+        geminiGate(false);
+        S.note = T('✨ AI 已關閉,語音指令恢復', '✨ AI closed — voice commands back');
+        draw();
+      }
+    } catch {}
+  }, 5000);
+}
+
 // 轉向指令。語音（voice.js）和鍵盤共用這一個入口。
 window.__turn = (cmd, text) => {
+  // AI 對話中:只聽「呼叫AI」(要留著關它),其餘指令一律不理
+  if (GG.on && cmd !== 'gemini') {
+    S.note = T('✨ AI 對話中,語音指令暫停(說「呼叫AI」結束)',
+               '✨ Chatting with AI — commands paused (say "call AI" to end)');
+    draw(); return;
+  }
   if (cmd === 'guide') {
     // 「導覽」= 內建景點;附近沒有景點可講時才退而問 AI
     acceptGuide().then(ok => { if (!ok) aiGuide(); });
@@ -3122,9 +3147,13 @@ window.__turn = (cmd, text) => {
   if (cmd === 'gemini') {                           // 「呼叫AI」= Gemini Live 開關
     S.note = T('✨ 呼叫 AI…', '✨ Summoning AI…'); draw();
     fetch('/api/gemini').then(r => r.json()).then(j => {
-      S.note = j.action === 'closed' ? T('✨ AI 已關閉', '✨ AI dismissed')
-             : j.action === 'opened' ? T('✨ AI 上線,開聊吧', '✨ AI is live — talk away')
+      S.note = j.action === 'closed' ? T('✨ AI 已關閉,語音指令恢復', '✨ AI dismissed — voice commands back')
+             : j.action === 'opened' ? T('✨ AI 上線,開聊吧(自家語音暫停,說「呼叫AI」關)',
+                                          '✨ AI is live — own voice paused, say "call AI" to close')
              : '✨ ' + (j.error || '');
+      // AI 對話中自家語音只留「呼叫AI」:兩支麥克風同時聽,
+      // 你跟 Gemini 說「介紹一下…」會被自家當成指令(實際反饋)。
+      geminiGate(j.action === 'opened');
     }).catch(() => {});
     return;
   }
