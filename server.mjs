@@ -333,6 +333,72 @@ const handler = async (req, res) => {
       }
       return json(res, { error: '附近找不到街景' }, 404);
     }
+    // 鬧區資料:店家密度點 + 徒步區/商業區多邊形。「熱鬧」沒有官方資料,
+    // 店家密度是拿得到的最好代理(OSM 的 shop/amenity 標得很全)。
+    // 走 Overpass API(免金鑰,禮貌 UA);bbox 吸附到 0.02° 格網再查,
+    // 平移地圖時大多命中快取,不會每動一下就打一次 Overpass。
+    if (u.pathname === '/api/vibe') {
+      const b = (u.searchParams.get('bbox') || '').split(',').map(Number);
+      if (b.length !== 4 || b.some(x => !isFinite(x))) return json(res, { error: 'bbox 要 s,w,n,e' }, 400);
+      let [s0, w0, n0, e0] = b;
+      // 太大的範圍(縮太遠)夾到中心 0.12° 見方,Overpass 才回得來
+      const cy = (s0 + n0) / 2, cx = (w0 + e0) / 2;
+      if (n0 - s0 > 0.12) { s0 = cy - 0.06; n0 = cy + 0.06; }
+      if (e0 - w0 > 0.16) { w0 = cx - 0.08; e0 = cx + 0.08; }
+      const G = 0.02;
+      const key = [Math.floor(s0 / G) * G, Math.floor(w0 / G) * G,
+                   Math.ceil(n0 / G) * G, Math.ceil(e0 / G) * G].map(x => x.toFixed(2));
+      const ck = key.join(',');
+      if (!globalThis.vibeMem) globalThis.vibeMem = new Map();
+      const mem = globalThis.vibeMem;
+      if (!mem.has(ck)) {
+        const bb = key.join(',');
+        const q3 = `[out:json][timeout:25];
+(node[shop](${bb});
+ node[amenity~"^(restaurant|cafe|bar|pub|fast_food|biergarten|food_court|ice_cream|nightclub|marketplace)$"](${bb}););
+out skel qt 12000;
+(way[highway=pedestrian](${bb});
+ way[landuse=retail](${bb});
+ way[amenity=marketplace](${bb}););
+out geom qt 500;`;
+        mem.set(ck, (async () => {
+          // 磁碟快取:同一格查過就不再打 Overpass(店家分布變動很慢)
+          const vdir = join(fileURLToPath(new URL('.', import.meta.url)), '.vibe');
+          const vf = join(vdir, ck.replace(/[^0-9.,-]/g, '') + '.json');
+          try { return JSON.parse(await readFile(vf, 'utf8')); } catch {}
+          // 主站忙線會 504(每 IP 有配額);kumi/coffee 實測掛著不回,
+          // mail.ru 的鏡像快又穩,當第二選擇
+          const MIRRORS = ['https://overpass-api.de/api/interpreter',
+                           'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+          let j = null, lastErr = null;
+          for (const host of MIRRORS) {
+            try {
+              const r = await fetch(host, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded',
+                  'User-Agent': `pano-runner/1.0 (+https://github.com/cheyuan1115/pano-runner; contact: ${process.env.PANO_CONTACT || 'see-repo'})` },
+                body: 'data=' + encodeURIComponent(q3),
+                signal: AbortSignal.timeout(30000) });
+              if (!r.ok) { lastErr = new Error('overpass ' + r.status); continue; }
+              j = await r.json(); break;
+            } catch (e) { lastErr = e; }
+          }
+          if (!j) throw lastErr || new Error('overpass 全掛');
+          const pts = [], polys = [];
+          for (const el2 of j.elements || []) {
+            if (el2.type === 'node' && el2.lat) pts.push([+el2.lat.toFixed(5), +el2.lon.toFixed(5)]);
+            else if (el2.type === 'way' && el2.geometry?.length > 2)
+              polys.push(el2.geometry.map(g => [+g.lat.toFixed(5), +g.lon.toFixed(5)]));
+          }
+          console.log(`鬧區 ${ck}:店家 ${pts.length}、區塊 ${polys.length}`);
+          try { await mkdir(vdir, { recursive: true }); await writeFile(vf, JSON.stringify({ pts, polys })); } catch {}
+          return { pts, polys };
+        })().catch(e => { mem.delete(ck); throw e; }));
+        if (mem.size > 60) mem.delete(mem.keys().next().value);
+      }
+      try { return json(res, await mem.get(ck)); }
+      catch (e) { return json(res, { error: String(e.message || e).slice(0, 60), pts: [], polys: [] }, 502); }
+    }
     // 指定範圍內的景點。地圖只要看得到的那些，不用整包送。
     if (u.pathname === '/api/landmarks') {
       const b = (u.searchParams.get('bbox') || '').split(',').map(Number);

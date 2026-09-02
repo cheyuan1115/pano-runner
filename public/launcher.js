@@ -31,6 +31,24 @@ function loadLandmarks() {
     drawInk();
   }, 200);
 }
+// 鬧區疊層:店家密度熱區 + 徒步區/商業區塊。「哪條街熱鬧」地圖上看不出來,
+// 店家密度是最好的代理指標(實際反饋:查都市地圖不知道哪裡熱鬧)。
+let vibe = null, vibeTimer = null;
+let vibeOn = localStorage.getItem('pano-vibe') !== '0';
+function loadVibe() {
+  clearTimeout(vibeTimer);
+  if (!vibeOn || V.z < 13) return;         // 縮太遠一格才幾個像素,畫了也看不出層次
+  vibeTimer = setTimeout(async () => {
+    const { w, h } = size();
+    const nw = toLL(0, 0), se = toLL(w, h);
+    try {
+      const r = await fetch(`/api/vibe?bbox=${se.lat},${nw.lng},${nw.lat},${se.lng}`);
+      const j = await r.json();
+      if (j.pts && j.pts.length) { vibe = j; drawInk(); }
+    } catch {}
+  }, 350);
+}
+
 let shown = null;                                    // 現在畫在地圖上的那一趟
 
 // ── Web Mercator ──
@@ -94,6 +112,7 @@ function drawMap() {
   for (const [k, img] of cache) if (!keep.has(k)) img.style.display = 'none';
   const zl = el('zlvl'); if (zl) zl.textContent = 'z' + V.z;
   loadLandmarks();
+  loadVibe();
   drawInk();
 }
 
@@ -102,6 +121,38 @@ function drawInk() {
   ink.width = w * dpr; ink.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  if (vibeOn && vibe && V.z >= 13) {
+    // 徒步區/商業區塊:整塊淡橘,一眼看出「商店街在這」
+    ctx.fillStyle = 'rgba(255,150,60,.10)';
+    ctx.strokeStyle = 'rgba(255,150,60,.22)'; ctx.lineWidth = 1;
+    for (const poly of vibe.polys || []) {
+      ctx.beginPath();
+      for (let i = 0; i < poly.length; i++) {
+        const q = toScreen({ lat: poly[i][0], lng: poly[i][1] });
+        i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y);
+      }
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+    // 店家熱度:26px 格子計數 → 越密越紅,整層模糊一次就是熱區圖
+    const CS = 26, bins = new Map();
+    for (const pp of vibe.pts) {
+      const q = toScreen({ lat: pp[0], lng: pp[1] });
+      if (q.x < -CS || q.y < -CS || q.x > w + CS || q.y > h + CS) continue;
+      const k = Math.floor(q.x / CS) + ':' + Math.floor(q.y / CS);
+      bins.set(k, (bins.get(k) || 0) + 1);
+    }
+    const off = loadVibe.cv || (loadVibe.cv = document.createElement('canvas'));
+    off.width = w; off.height = h;
+    const oc = off.getContext('2d');
+    for (const [k, c] of bins) {
+      const [bx, by] = k.split(':').map(Number);
+      oc.fillStyle = `rgba(255,90,20,${Math.min(.55, c * .07)})`;
+      oc.fillRect(bx * CS, by * CS, CS, CS);
+    }
+    ctx.save(); ctx.filter = 'blur(9px)'; ctx.globalAlpha = .5;
+    ctx.drawImage(off, 0, 0);
+    ctx.restore();
+  }
   if (typeof shown !== 'undefined' && shown) {
     ctx.strokeStyle = '#8ab4f8'; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     ctx.beginPath();
@@ -547,6 +598,17 @@ el('zin').onclick = () => zoomBy(1);
 el('zout').onclick = () => zoomBy(-1);
 
 renderRuns();
+// 鬧區開關:亮著=開。關掉記住,下次進來還是關的
+{
+  const vb = el('vibehot');
+  const paint = () => { vb.style.borderColor = vibeOn ? '#e08030' : ''; vb.style.color = vibeOn ? '#ffb37a' : ''; };
+  paint();
+  vb.onclick = () => {
+    vibeOn = !vibeOn;
+    localStorage.setItem('pano-vibe', vibeOn ? '1' : '0');
+    paint(); if (vibeOn) loadVibe(); drawInk();
+  };
+}
 drawMap(); say();
 
 // 啟動器的 lang 要跟著帶進跑步頁,不然英文模式按「開始跑」就變回中文
@@ -594,6 +656,7 @@ function langQ() {
     '開始跑': 'Start running', '重設': 'Reset',
     '🌸 特色路線 ▸': '🌸 Special trails ▸',
     '🤖 AI 排路線': '🤖 AI plan a route',
+    '🔥 鬧區': '🔥 Busy areas',
     '🗿馬丘比丘': '🗿 Machu Picchu', '🐫吉薩金字塔': '🐫 Giza Pyramids',
     '🏚軍艦島廢墟': '🏚 Hashima ruins', '🐧南極': '🐧 Antarctica',
     '🏔馬特洪冬景': '🏔 Matterhorn winter', '⛩伏見稻荷': '⛩ Fushimi Inari',
