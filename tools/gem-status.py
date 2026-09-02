@@ -28,8 +28,14 @@ b = bounds()
 if not b: print('NONE'); sys.exit()
 t = ocr(b)
 if '暫停' not in t and 'paused' not in t.lower(): print('LIVE'); sys.exit()
-# 已暫停 → 按波形鈕恢復。位置隨晶片列版面變,主位置不行換備用位置
 import time
+# close 模式:Live 自暫停 = 使用者聊完不講話了 → 收起浮窗(按右上 ✕),
+# 呼叫端會恢復自家語音。這就是「不用喊指令的語音關閉」。
+if len(sys.argv) > 1 and sys.argv[1] == 'close':
+    subprocess.run(['cliclick','c:%d,%d' % (int(b['X']+b['Width']-20), int(b['Y']+18))])
+    time.sleep(1.2)
+    print('CLOSED' if not bounds() else 'STUCK'); sys.exit()
+# resume 模式:按波形鈕恢復聽取。位置隨晶片列版面變,主位置不行換備用位置
 for dx, dy in [(57, 27), (42, 43)]:
     subprocess.run(['cliclick','c:%d,%d' % (int(b['X']+b['Width']-dx), int(b['Y']+b['Height']-dy))])
     time.sleep(1.2)

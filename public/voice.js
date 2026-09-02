@@ -314,6 +314,22 @@
     if (!V.on && Date.now() - V.alive > 6000) start();
   }, 3000);
 
+  // AI 對話中整個讓出麥克風:辨識開著時 Gemini Live「聽取中」卻收到無聲
+  //(實際反饋:我們聽得到、它聽不到)。V.paused 同時擋掉看門狗的重啟。
+  V.hush = on => {
+    if (on) {
+      V.paused = true;
+      gen++;
+      try { if (rec) { rec.onend = null; rec.onerror = null; rec.abort(); } } catch {}
+      V.on = false;
+      vlog('AI 對話,麥克風讓給 Gemini');
+    } else {
+      V.paused = false; V.alive = Date.now();
+      start();
+      vlog('AI 結束,恢復監聽');
+    }
+  };
+
   vlog('voice.js 載入');
   start();
   // 每十五秒回報一次狀態，就算完全沒聲音也看得出辨識器活著沒

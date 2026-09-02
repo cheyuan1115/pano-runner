@@ -916,11 +916,13 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
     if (u.pathname === '/api/gemini/status') {
       try {
         const { execFile } = await import('node:child_process');
+        const mode = u.searchParams.get('onpause') === 'close' ? 'close' : 'resume';
         const out = await new Promise((ok, no) => execFile('python3',
-          [join(fileURLToPath(new URL('.', import.meta.url)), 'tools', 'gem-status.py')],
+          [join(fileURLToPath(new URL('.', import.meta.url)), 'tools', 'gem-status.py'), mode],
           { timeout: 15000 }, (e, o) => e ? no(e) : ok((o || '').trim())));
         if (out === 'RESUMED') console.log('Gemini Live 自暫停,已按回聽取');
-        return json(res, { on: out !== 'NONE', state: out });
+        if (out === 'CLOSED') console.log('Gemini Live 自暫停(對話結束),已收起');
+        return json(res, { on: out !== 'NONE' && out !== 'CLOSED', state: out });
       } catch (e) { return json(res, { on: false, error: String(e.message || e).slice(0, 60) }); }
     }
     if (u.pathname === '/api/gemini') {

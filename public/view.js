@@ -3103,13 +3103,16 @@ const GG = { on: false, timer: 0 };
 function geminiGate(on) {
   GG.on = on;
   clearInterval(GG.timer);
+  // 對話期間整個讓出麥克風(不然 Gemini「聽取中」卻收到無聲);
+  // 巡邏用 onpause=close:它 2 分鐘沒聲音自暫停 = 你聊完了 → 自動收起、恢復語音
+  window.__voice?.hush?.(on);
   if (on) GG.timer = setInterval(async () => {
     try {
-      const j = await (await fetch('/api/gemini/status',
-        { signal: AbortSignal.timeout(4000) })).json();
+      const j = await (await fetch('/api/gemini/status?onpause=close',
+        { signal: AbortSignal.timeout(12000) })).json();
       if (!j.on) {
         geminiGate(false);
-        S.note = T('✨ AI 已關閉,語音指令恢復', '✨ AI closed — voice commands back');
+        S.note = T('✨ AI 已結束,語音指令恢復', '✨ AI closed — voice commands back');
         draw();
       }
     } catch {}
@@ -3148,8 +3151,8 @@ window.__turn = (cmd, text) => {
     S.note = T('✨ 呼叫 AI…', '✨ Summoning AI…'); draw();
     fetch('/api/gemini').then(r => r.json()).then(j => {
       S.note = j.action === 'closed' ? T('✨ AI 已關閉,語音指令恢復', '✨ AI dismissed — voice commands back')
-             : j.action === 'opened' ? T('✨ AI 上線,開聊吧(自家語音暫停,說「呼叫AI」關)',
-                                          '✨ AI is live — own voice paused, say "call AI" to close')
+             : j.action === 'opened' ? T('✨ AI 上線,開聊吧(聊完停止說話它會自動收起)',
+                                          '✨ AI is live — stop talking for 2 min and it closes itself')
              : '✨ ' + (j.error || '');
       // AI 對話中自家語音只留「呼叫AI」:兩支麥克風同時聽,
       // 你跟 Gemini 說「介紹一下…」會被自家當成指令(實際反饋)。
