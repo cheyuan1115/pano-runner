@@ -1059,7 +1059,7 @@ async function stepOnce() {
     // 播報中視角是盯著景點的，不要被行進方向蓋掉；播完會自己轉回來
     if (!S.watchLm) S.heading = aimHead;
   }
-  S.steps++; S.moved += d;
+  S.steps++; if (!qzOdo()) S.moved += d;   // 皮帶模式:里程歸積分器管
   // 走到室內了：記下來，並往回退到最後一顆確定在地面的
   if (isIndoor(P.meta)) {
     indoorIds.add(P.meta.pano);
@@ -1354,7 +1354,7 @@ function saveTrack() {
 
 function trackPoint(meta) {
   if (!S.runId) S.runId = Date.now();
-  const pt = { lat: +meta.lat.toFixed(6), lng: +meta.lng.toFixed(6), t: Date.now() };
+  const pt = { lat: +meta.lat.toFixed(6), lng: +meta.lng.toFixed(6), t: Date.now(), m: Math.round(S.moved) };
   // 運動數據順手記進去(TCX/Strava 用):海拔來自坡度服務,其餘來自器材
   if (BTC.prevPt?.e != null) pt.e = BTC.prevPt.e;
   if (QZS.at && Date.now() - QZS.at < 4000) {
@@ -2062,7 +2062,7 @@ async function rewindFor(pending) {
         tick();
       });
       S.cur = P; S.nxt = null; S.mix = 0; S.tMove = 0;
-      S.moved = Math.max(0, S.moved - e.d);   // 倒帶不計里程
+      if (!qzOdo()) S.moved = Math.max(0, S.moved - e.d);   // 倒帶不計里程(皮帶模式除外:皮帶跑的都算)
       if (S.track.length) S.track.pop();      // GPX 也退掉,重跑時再記
       updateAttr();
     }
@@ -2139,6 +2139,19 @@ const STK = { kmh: 0, at: 0, seen: false };
 // 4 秒內有新鮮數據就是最高優先的速度來源 —— 藍牙讀出來的真實速度,
 // 比任何用猜的(麥克風/手擺/頭部)都準;斷線自動退回原本機制。
 const QZS = { kmh: null, heart: 0, at: 0 };
+// 里程以跑步機/練習台為準(實際反饋:全景點距加總比皮帶多一到兩成 ——
+// 軌道步距寫死 15m、慢速有 3.6 km/h 地板、快轉段照全額記,全往多的方向偏)。
+// 器材在線時改成積分「皮帶速度×時間」,轉場/倒帶/快轉一律不碰里程;
+// 器材斷線(4 秒沒訊號)自動退回原本的點距加總。
+const QZI = { t: 0 };
+const qzOdo = () => !!QZI.t;
+setInterval(() => {
+  const now = Date.now();
+  if (S.running && QZS.at && now - QZS.at < 4000 && QZS.kmh != null) {
+    if (QZI.t) S.moved += Math.max(0, QZS.kmh) / 3.6 * (now - QZI.t) / 1000;
+    QZI.t = now;
+  } else QZI.t = 0;
+}, 500);
 // 器材儀表段(收摺與完整 HUD 共用)—— 之前只放完整版,精簡列沒有,
 // 使用者以為資料不存在(實際反饋,整條 Tacx 偵錯的最後一謎)
 function qzSeg() {

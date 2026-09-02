@@ -25,13 +25,20 @@
     const s32 = v => u32(v < 0 ? v + 0x100000000 : v);
     const ts = t => Math.round(t / 1000) - EPOCH;
 
-    // 累積距離(公尺)
-    const dist = [0];
-    for (let i = 1; i < track.length; i++) {
-      const a = track[i - 1], b = track[i];
-      const dp = (b.lat - a.lat) * Math.PI / 180, dl = (b.lng - a.lng) * Math.PI / 180;
-      const h = Math.sin(dp / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dl / 2) ** 2;
-      dist.push(dist[i - 1] + 2 * 6371000 * Math.asin(Math.sqrt(h)));
+    // 累積距離(公尺):軌跡點帶皮帶里程(m)就以跑步機為準,沒有才用座標推算
+    let dist;
+    if (track[0].m != null) {
+      const m0 = track[0].m;
+      dist = track.map(p => Math.max(0, (p.m ?? m0) - m0));
+      for (let i = 1; i < dist.length; i++) if (dist[i] < dist[i - 1]) dist[i] = dist[i - 1];
+    } else {
+      dist = [0];
+      for (let i = 1; i < track.length; i++) {
+        const a = track[i - 1], b = track[i];
+        const dp = (b.lat - a.lat) * Math.PI / 180, dl = (b.lng - a.lng) * Math.PI / 180;
+        const h = Math.sin(dp / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dl / 2) ** 2;
+        dist.push(dist[i - 1] + 2 * 6371000 * Math.asin(Math.sqrt(h)));
+      }
     }
     const t0 = track[0].t, tN = track[track.length - 1].t;
     const secs = Math.max(1, (tN - t0) / 1000);
