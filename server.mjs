@@ -512,8 +512,11 @@ out geom qt 500;`;
       sp.delete('proj'); sp.set('panels', '3');
       sp.set('panel', u.pathname === '/left' ? '0' : u.pathname === '/right' ? '2' : '1');
       sp.set('role', 'follow'); sp.set('net', '1');
-      // 小地圖只留主機那台(左右螢幕不要,使用者指定)
-      if (u.pathname !== '/mid') sp.set('mini', '0');
+      // 三螢幕分工(使用者指定):左=大張半透明地圖,右=導覽照片,中=字幕
+      if (u.pathname === '/left') sp.set('mini', 'big');
+      else if (u.pathname !== '/mid') sp.set('mini', '0');
+      if (u.pathname === '/right') sp.set('photos', '1');
+      else sp.delete('photos');
       res.writeHead(302, { location: '/run.html?' + sp });
       return res.end();
     }

@@ -1145,6 +1145,13 @@ function bcast() {
     turn: S.stepTurn || 0,
     ts: performance.now(),   // 主機時鐘戳:側機照這個軸內插,不受網路抖動影響
   };
+  // 右螢幕的照片:把「現在顯示中的那張」隨狀態送過去(照片網址都在同一台伺服器)
+  if (S.speaking) {
+    const pv = document.getElementById('lm-photo');
+    const im = pv && [...pv.children].find(c => c.classList.contains('on'));
+    msg.ph = (pv && pv.classList.contains('on') && im && im.getAttribute('src')) || '';
+    msg.lmn = S.nowSpeaking || '';
+  }
   CH.postMessage(msg);
   // 跨電腦:丟給伺服器轉發。跟本機 BroadcastChannel 一樣「每畫一幀就送」——
   // 之前節流到 30Hz,側屏只好用追趕/凍結/硬切去掩蓋階梯感,那堆補償
@@ -1305,8 +1312,31 @@ if (S.role === 'follow' && S.net) {
     S.stepD = a2.stepD; S.travelDir = a2.travelDir; S.sceneR = a2.sceneR;
     S.zoomPer = a2.zoomPer; S.kmh = a2.kmh; S.moved = a2.moved;
     S.steps = a2.steps; S.note = a2.note; S.running = a2.running;
+    if (S.photoSide) sidePhoto(a2);
+    if (S.miniBig && S.cur.meta) {
+      // 主機不會把整條軌跡送過來,自己邊跟邊記,小地圖才畫得出跑過的路線
+      const lt = S.track[S.track.length - 1];
+      if (!lt || lt.pano !== S.cur.meta.pano) {
+        S.track.push({ lat: S.cur.meta.lat, lng: S.cur.meta.lng, pano: S.cur.meta.pano });
+        if (S.track.length > 3000) S.track.shift();
+      }
+    }
     draw();
   })();
+}
+
+// 右螢幕:主機播報時,把它正在顯示的照片放大置中呈現(三螢幕分工)
+function sidePhoto(m) {
+  const pv = $('lm-photo'); if (!pv) return;
+  const im = pv.children[0];
+  if (m.ph) {
+    if (im.getAttribute('src') !== m.ph) { im.src = m.ph; im.classList.add('on'); }
+    pv.classList.add('on');
+    if (m.lmn) { $('lm-name').textContent = m.lmn; $('lm-text').textContent = ''; $('lm-bar').classList.add('on'); }
+  } else {
+    pv.classList.remove('on'); im.classList.remove('on'); im.removeAttribute('src');
+    $('lm-bar').classList.remove('on');
+  }
 }
 
 // 開側翼視窗。瀏覽器一次操作只允許開一個彈出視窗（實測第二個會被擋），
@@ -2435,6 +2465,7 @@ setInterval(slopeTick, 1500);
 window.btConnect = btConnect;
 // 有 Web Bluetooth 的環境才顯示按鈕(Quest 瀏覽器沒有,那邊用 QZ)
 setTimeout(() => {
+  if (S.role === 'follow') return;   // 側螢幕不放器材鈕:藍牙只連在主機
   const b = document.getElementById('btbtn');
   if (b && navigator.bluetooth) {
     b.style.display = 'block';
@@ -2657,7 +2688,12 @@ function drawMini() {
   if (!cv || !S.cur?.meta) return;
   const me = S.cur.meta;
   const dpr = Math.min(2, devicePixelRatio || 1);
-  const W = 240, H = 240;
+  // 左側螢幕(mini=big):放大到螢幕短邊六成、恆定半透明,疊在風景上當導航
+  const W = S.miniBig ? Math.min(560, Math.round(Math.min(innerWidth, innerHeight) * .62)) : 240, H = W;
+  if (cv.style.width !== W + 'px') {
+    cv.style.width = cv.style.height = W + 'px';
+    if (S.miniBig) cv.style.opacity = '.66';
+  }
   if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3424,9 +3460,23 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('mini') === '0') S.mini = false;
+  S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
+  S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中
+  if (S.photoSide) {
+    const st = document.createElement('style');
+    st.textContent = '#lm-photo{left:50%;top:50%;right:auto;transform:translate(-50%,-50%);'
+      + 'width:min(78vw,124vh);height:min(56vw,88vh);box-shadow:0 14px 70px rgba(0,0,0,.65)}'
+      + '#lm-photo.on{opacity:.97}';
+    // run.html 的 <style> 在 body 裡,插 head 會被排序蓋掉 —— 要插 body 尾
+    document.body.appendChild(st);
+  }
   // 從屬側屏一律不顯示小地圖(除非明帶 mini=1)。不能只靠 /left 轉址
   // 加參數 —— 側機重新整理的是轉址後的舊網址,參數就掉了(實測還是有)。
-  if (S.role === 'follow' && q.get('mini') !== '1') S.mini = false;
+  if (S.role === 'follow' && q.get('mini') !== '1' && !S.miniBig) S.mini = false;
+  if (S.role === 'follow') {
+    // 側螢幕不放器材連線鈕:藍牙只能連在主機那台,擺著只會誤導
+    for (const bid of ['btbtn', 'hrbtn']) { const b = $(bid); if (b) b.style.display = 'none'; }
+  }
   if (q.get('mmvr') === '1') S.mmvrTest = true;
   if (q.get('season')) S.season = q.get('season');
   if (S.season === 'sakura') S.lockMonths = [4, 3];   // 四月優先,三月備胎
