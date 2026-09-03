@@ -27,9 +27,10 @@ const LA_CACHE = join(ROOT_DIR, '.lacache');
 const isApple = id => /^\d{12,}$/.test(String(id || ''));
 // 只做到 z3(3328):zoom=3 抓面的重投影快 3.5 倍,4560px 縮到 3328 仍銳利。
 // z4/z5 對映回 z3,畫質選高也不會要求做不出來的 6656。
-const LA_GEOM = { h: 1664, w: 3328, tile: 512, zooms: [
-  { w: 416, h: 208 }, { w: 832, h: 416 }, { w: 1664, h: 832 },
-  { w: 3328, h: 1664 }, { w: 3328, h: 1664 }, { w: 3328, h: 1664 }] };
+// 尺寸全用 512 整數倍(exact=true,跟 Google 同路徑),否則半塊黑邊會滲進中央
+const LA_GEOM = { h: 1536, w: 3072, tile: 512, zooms: [
+  { w: 384, h: 192 }, { w: 768, h: 384 }, { w: 1536, h: 768 },
+  { w: 3072, h: 1536 }, { w: 3072, h: 1536 }, { w: 3072, h: 1536 }] };
 let AW = null, awRid = 0; const awPend = new Map();
 async function awEnsure() {
   if (AW && !AW.killed && AW.exitCode == null) return;

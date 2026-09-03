@@ -167,7 +167,7 @@ def handle(req):
         tr = time.time()
         os.makedirs(d, exist_ok=True)
         out = {'tile': 512, 'zooms': {}}
-        for z, w in ((2, 1664), (3, 3328)):
+        for z, w in ((2, 1536), (3, 3072)):   # 512 整數倍:不留半塊黑邊(否則環繞接縫的黑邊會滲進畫面中央)
             h = w // 2
             im = eq.resize((w, h), Image.LANCZOS)
             cols, rows = math.ceil(w / 512), math.ceil(h / 512)
