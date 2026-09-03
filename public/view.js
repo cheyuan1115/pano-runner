@@ -460,11 +460,11 @@ async function load(P, panoId, heading) {
       { signal: AbortSignal.timeout(12000) })).json();
   } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; return false; }
   if (meta.error) { S.note = meta.error; return false; }
-  // Apple:pano.heading 是會亂翻 180° 的雜訊(實測),拿它算 yaw 畫面就忽左忽右。
-  // 改用「進入這顆的行進方向」(load 的 heading 參數,平滑不翻)+ 一個固定偏移。
-  // 固定偏移 S.ayaw 可用 [ ] 微調並記住。這樣相鄰全景朝向連續,不再擺動。
-  if (S.src === 'apple' && Number.isFinite(heading))
-    meta.yaw = ((heading + (S.ayaw || 0)) % 360 + 360) % 360;
+  // Apple:worker 已填 Wc = pano.heading + 180(重投影影像中央的世界方位)。
+  // 每顆確定值,engine 用 S.heading - meta.yaw 自動補償來回兩趟的 180 差,
+  // 兩趟都朝正前方。aflip 是使用者微調(整體前後翻或 ±5°),預設 0。
+  if (S.src === 'apple' && Number.isFinite(meta.yaw))
+    meta.yaw = ((meta.yaw + S.aflip) % 360 + 360) % 360;
   // 月份鎖：這顆不是目標月份拍的、而且時光機裡有 → 改載那個月份的版本。
   // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
   // 櫻花模式是它的特例（[4,3]:四月優先,三月備胎 —— 實測 2018/3 整條
@@ -3430,14 +3430,19 @@ addEventListener('keydown', e => {
   else if (e.key === 'M') { MM.z = MM.z >= 17 ? 14 : MM.z + 1; S.note = `🗺 縮放 z${MM.z}`; }
   // Apple 方位微調:重投影中央方位有量測誤差,跑步中 [ 左轉 ] 右轉 5°,自動記住。
   // 只改「顯示朝向」,不影響行進方向(道路照跑)。改了要重載目前這顆才套用新 yaw。
-  else if ((e.key === '[' || e.key === ']') && S.src === 'apple') {
+  else if (e.key === '\\' && S.src === 'apple') {   // 整體前後翻 180°(反著走時按一下)
+    S.aflip = (S.aflip + 180) % 360;
+    localStorage.setItem('pano-aflip', S.aflip);
+    S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
+    S.note = `🔄 前後翻轉(${S.aflip ? '反' : '正'})`;
+    S.noteHold = Date.now() + 4000; draw();
+  }
+  else if ((e.key === '[' || e.key === ']') && S.src === 'apple') {   // 微調 5°
     const d = e.key === ']' ? 5 : -5;
-    S.ayaw = ((S.ayaw + d) % 360 + 360) % 360;
-    localStorage.setItem('pano-ayaw3', S.ayaw);
-    followCache.clear();
-    if (S.cur?.meta) S.cur.meta.yaw = ((S.cur.meta.yaw + d) % 360 + 360) % 360;
-    dropQueue(); fillQueue();             // 佇列裡的預抓也用新偏移重載,整段立刻套用
-    S.note = `🧭 方位微調 ${S.ayaw > 180 ? S.ayaw - 360 : S.ayaw}°([ ] 調整)`;
+    S.aflip = ((S.aflip + d) % 360 + 360) % 360;
+    localStorage.setItem('pano-aflip', S.aflip);
+    S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
+    S.note = `🧭 方位微調 ${S.aflip > 180 ? S.aflip - 360 : S.aflip}°`;
     S.noteHold = Date.now() + 4000; draw();
   }
   // 上緣檔位如果被視窗上限夾住、畫面跟現在一樣，就直接跳下一檔 ——
@@ -3514,7 +3519,8 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
-  S.ayaw = q.has('ayaw') ? +q.get('ayaw') : (localStorage.getItem('pano-ayaw3') != null ? +localStorage.getItem('pano-ayaw3') : 0);   // Apple 方位偏移(基準=行進方向,0=正前;[ ] 微調記住)
+  S.ayaw = 0;                                  // 種子:首顆朝行進方向選邊
+  S.aflip = +localStorage.getItem('pano-aflip') || 0;   // 整體前後(0 或 180),\\ 鍵切換記住
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中
