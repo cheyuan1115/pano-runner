@@ -2208,12 +2208,13 @@ function qzSeg() {
 //(QZ 那條路留給 VR:Quest 瀏覽器沒有 Web Bluetooth)。
 // 讀 Treadmill Data(0x2ACD)通知:速度必有(0.01 km/h),心率看旗標。
 // 數據直接寫進 QZS —— 跟 QZ 走同一條最高優先速度鏈與 HUD。
-async function btConnect() {
+async function btConnect(givenDev) {
   try {
-    const dev = await navigator.bluetooth.requestDevice({
+    const dev = givenDev || await navigator.bluetooth.requestDevice({
       filters: [{ services: ['fitness_machine'] }],
       optionalServices: ['heart_rate', 'cycling_power',
         '6e40fec1-b5a3-f393-e0a9-e50e24dcca9e'] });   // Tacx FE-C over BLE(私有)
+    try { localStorage.setItem('pano-bt-dev', dev.id); } catch {}
     const srv = await (await dev.gatt.connect()).getPrimaryService('fitness_machine');
     // 跑步機(0x2ACD Treadmill Data)或自行車台(0x2AD2 Indoor Bike Data),
     // 有哪個聽哪個
@@ -2396,10 +2397,11 @@ const CPS = { on: false, watt: null, kmh: null, cad: null, lr: null, lt: null, l
 // 獨立心率來源(Garmin 錶的廣播心率=標準 BLE 心率服務)。
 // 刻意不碰 QZS.at —— 心率不該啟動「器材速度接管」,只是補一欄數據
 const HR = { bpm: 0, at: 0 };
-async function hrConnect() {
+async function hrConnect(givenDev) {
   try {
-    const dev = await navigator.bluetooth.requestDevice({
+    const dev = givenDev || await navigator.bluetooth.requestDevice({
       filters: [{ services: ['heart_rate'] }] });
+    try { localStorage.setItem('pano-hr-dev', dev.id); } catch {}
     const srv = await (await dev.gatt.connect()).getPrimaryService('heart_rate');
     const ch = await srv.getCharacteristic(0x2A37);   // Heart Rate Measurement
     await ch.startNotifications();
@@ -2468,6 +2470,22 @@ async function slopeTick() {
 }
 setInterval(slopeTick, 1500);
 window.btConnect = btConnect;
+// 主選單配對過的裝置,開跑自動回連 —— 授權在啟動器按過一次就被 Chrome 記住,
+// 這裡 getDevices() 拿回來直連,不再跳選擇視窗(使用者要求把連線移到主選單)
+async function autoReconnect() {
+  if (S.role === 'follow' || !navigator.bluetooth?.getDevices) return;
+  let devs = [];
+  try { devs = await navigator.bluetooth.getDevices(); } catch { return; }
+  for (const [key, fn, label] of [['pano-bt-dev', btConnect, '🚴'], ['pano-hr-dev', hrConnect, '♥']]) {
+    const id = localStorage.getItem(key);
+    const dev = id && devs.find(d => d.id === id);
+    if (!dev) continue;
+    // 裝置沒開機時 connect 會等很久:8 秒沒上就先放棄,按鈕還在可手動連
+    fn(dev).catch(() => {});
+    await new Promise(r => setTimeout(r, 300));
+  }
+}
+setTimeout(autoReconnect, 1200);
 // 有 Web Bluetooth 的環境才顯示按鈕(Quest 瀏覽器沒有,那邊用 QZ)
 setTimeout(() => {
   if (S.role === 'follow') return;   // 側螢幕不放器材鈕:藍牙只連在主機

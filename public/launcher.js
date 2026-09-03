@@ -598,6 +598,38 @@ el('zin').onclick = () => zoomBy(1);
 el('zout').onclick = () => zoomBy(-1);
 
 renderRuns();
+// 器材配對:在這裡 requestDevice 一次,Chrome 記住授權;
+// 跑步頁開跑用 getDevices() 直連,不再跳選擇視窗(使用者要求移到主選單)
+{
+  const CFG = [
+    ['btpair', 'pano-bt-dev', '🚴', { filters: [{ services: ['fitness_machine'] }],
+      optionalServices: ['heart_rate', 'cycling_power', '6e40fec1-b5a3-f393-e0a9-e50e24dcca9e'] }],
+    ['hrpair', 'pano-hr-dev', '♥', { filters: [{ services: ['heart_rate'] }] }],
+  ];
+  if (!navigator.bluetooth) {
+    const r = el('pairrow'), lb = el('pairlb');
+    if (r) r.style.display = 'none';
+    if (lb) lb.style.display = 'none';
+  } else for (const [bid, key, icon, opts] of CFG) {
+    const b = el(bid); if (!b) continue;
+    const base = b.textContent;
+    const paint = () => {
+      const nm = localStorage.getItem(key + '-name');
+      if (nm) { b.textContent = `${icon} ✓ ${nm}`; b.style.borderColor = '#2f7d4f'; b.style.color = '#6fd08c'; }
+      else { b.textContent = base; b.style.borderColor = ''; b.style.color = ''; }
+    };
+    paint();
+    b.onclick = async () => {
+      try {
+        const dev = await navigator.bluetooth.requestDevice(opts);
+        localStorage.setItem(key, dev.id);
+        localStorage.setItem(key + '-name', (dev.name || '裝置').slice(0, 18));
+        paint();
+      } catch {}   // 使用者取消選擇視窗就算了
+    };
+  }
+}
+
 // 鬧區開關:亮著=開。關掉記住,下次進來還是關的
 {
   const vb = el('vibehot');
@@ -657,6 +689,8 @@ function langQ() {
     '🌸 特色路線 ▸': '🌸 Special trails ▸',
     '🤖 AI 排路線': '🤖 AI plan a route',
     '🔥 鬧區': '🔥 Busy areas',
+    '器材（配對一次，開跑自動連）': 'Equipment (pair once, auto-connects on run)',
+    '🚴 跑步機／練習台': '🚴 Treadmill / trainer', '♥ 心率': '♥ Heart rate',
     '🗿馬丘比丘': '🗿 Machu Picchu', '🐫吉薩金字塔': '🐫 Giza Pyramids',
     '🏚軍艦島廢墟': '🏚 Hashima ruins', '🐧南極': '🐧 Antarctica',
     '🏔馬特洪冬景': '🏔 Matterhorn winter', '⛩伏見稻荷': '⛩ Fushimi Inari',
