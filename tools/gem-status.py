@@ -14,7 +14,8 @@ def bounds():
     return None
 
 def ocr(b):
-    p = '/tmp/gem-ocr.png'
+    import os
+    p = '/tmp/gem-ocr-%d.png' % os.getpid()   # 巡邏會重疊,共用檔名會互踩
     subprocess.run(['screencapture','-x','-R','%d,%d,%d,%d' % (b['X'],b['Y'],b['Width'],b['Height']), p], check=True)
     import Vision
     from Foundation import NSURL

@@ -923,10 +923,13 @@ ${(q2.recent || []).length ? '5. 之前已經講過以下內容,不要重複:' +
         const out = await new Promise((ok, no) => execFile('python3',
           [join(fileURLToPath(new URL('.', import.meta.url)), 'tools', 'gem-status.py'), mode],
           { timeout: 15000 }, (e, o) => e ? no(e) : ok((o || '').trim())));
-        if (out === 'RESUMED') console.log('Gemini Live 自暫停,已按回聽取');
-        if (out === 'CLOSED') console.log('Gemini Live 自暫停(對話結束),已收起');
+        if (out !== 'LIVE') console.log('Gemini 巡邏:', out);
         return json(res, { on: out !== 'NONE' && out !== 'CLOSED', state: out });
-      } catch (e) { return json(res, { on: false, error: String(e.message || e).slice(0, 60) }); }
+      } catch (e) {
+        // 巡邏出錯不等於「浮窗不見了」—— 回 err 讓呼叫端自己數,不要誤判成已關閉
+        console.log('Gemini 巡邏失敗:', String(e.message || e).slice(0, 80));
+        return json(res, { on: true, err: 1, error: String(e.message || e).slice(0, 60) });
+      }
     }
     if (u.pathname === '/api/gemini') {
       try {

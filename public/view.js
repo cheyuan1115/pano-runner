@@ -3165,16 +3165,26 @@ function geminiGate(on) {
   // 對話期間整個讓出麥克風(不然 Gemini「聽取中」卻收到無聲);
   // 巡邏用 onpause=close:它 2 分鐘沒聲音自暫停 = 你聊完了 → 自動收起、恢復語音
   window.__voice?.hush?.(on);
+  GG.off = 0; GG.err = 0; GG.busy = false;
   if (on) GG.timer = setInterval(async () => {
+    if (GG.busy) return;              // 上一輪 OCR 還沒回來就跳過,別疊著跑
+    GG.busy = true;
     try {
       const j = await (await fetch('/api/gemini/status?onpause=close',
-        { signal: AbortSignal.timeout(12000) })).json();
-      if (!j.on) {
+        { signal: AbortSignal.timeout(15000) })).json();
+      if (j.err) {
+        // 巡邏壞掉不代表 AI 關了。連錯 4 次才保底恢復語音,免得永遠卡在暫停
+        if (++GG.err >= 4) { geminiGate(false); S.note = '✨ 巡邏失敗,語音先恢復'; draw(); }
+        return;
+      }
+      GG.err = 0;
+      // 「不存在」要連續兩次才算數:單次可能是截圖瞬間的誤判
+      if (!j.on) { if (++GG.off >= 2) {
         geminiGate(false);
         S.note = T('✨ AI 已結束,語音指令恢復', '✨ AI closed — voice commands back');
         draw();
-      }
-    } catch {}
+      } } else GG.off = 0;
+    } catch {} finally { GG.busy = false; }
   }, 5000);
 }
 
