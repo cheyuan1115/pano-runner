@@ -460,6 +460,7 @@ async function load(P, panoId, heading) {
       { signal: AbortSignal.timeout(12000) })).json();
   } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; return false; }
   if (meta.error) { S.note = meta.error; return false; }
+  if (S.src === 'apple' && S.ayaw) meta.yaw = ((meta.yaw + S.ayaw) % 360 + 360) % 360;
   // 月份鎖：這顆不是目標月份拍的、而且時光機裡有 → 改載那個月份的版本。
   // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
   // 櫻花模式是它的特例（[4,3]:四月優先,三月備胎 —— 實測 2018/3 整條
@@ -3423,6 +3424,16 @@ addEventListener('keydown', e => {
     S.note = S.mini ? '🗺 小地圖開' : '🗺 小地圖關';
   }
   else if (e.key === 'M') { MM.z = MM.z >= 17 ? 14 : MM.z + 1; S.note = `🗺 縮放 z${MM.z}`; }
+  // Apple 方位微調:重投影中央方位有量測誤差,跑步中 [ 左轉 ] 右轉 5°,自動記住。
+  // 只改「顯示朝向」,不影響行進方向(道路照跑)。改了要重載目前這顆才套用新 yaw。
+  else if ((e.key === '[' || e.key === ']') && S.src === 'apple') {
+    S.ayaw = ((S.ayaw + (e.key === ']' ? 5 : -5)) % 360 + 360) % 360;
+    localStorage.setItem('pano-ayaw', S.ayaw);
+    followCache.clear();                 // 清快取,下一顆用新 yaw 重算
+    if (S.cur?.meta) S.cur.meta.yaw = ((S.cur.meta.yaw + (e.key === ']' ? 5 : -5)) % 360 + 360) % 360;
+    S.note = `🧭 方位微調 ${S.ayaw > 180 ? S.ayaw - 360 : S.ayaw}°([ ] 調整)`;
+    S.noteHold = Date.now() + 4000; draw();
+  }
   // 上緣檔位如果被視窗上限夾住、畫面跟現在一樣，就直接跳下一檔 ——
   // 預設 65 在多數視窗已經頂到上限，65→75 畫面完全相同，按了像沒反應。
   else if (e.key === 'v') {
@@ -3497,6 +3508,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
+  S.ayaw = q.has('ayaw') ? +q.get('ayaw') : (+localStorage.getItem('pano-ayaw') || 0);   // Apple 方位微調(可跑步中 [ ] 調整,自動記住)
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中

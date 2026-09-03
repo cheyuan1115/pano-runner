@@ -67,8 +67,14 @@ def handle(req):
         ns.sort(key=lambda x: x['d'])
         # 上限放大:點距約 4m,只留 24 顆全擠在 10m 內,Node 端稀釋成 13m 步距時
         # 挑不到 13m 的候選(實測步距仍是 4m、跑不順)。留到 60 顆才涵蓋到 ~18m。
+        # 重投影後等距柱狀圖的「正中央 = 行進反方向」(streetlevel 文件明載)。
+        # 引擎的 meta.yaw 要填「影像中央的世界方位」,所以是 heading+180,不是 heading。
+        # 並排 Google/Apple 全景比對確認(之前填 heading 差 180°,看的是正後方)。
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
-                'yaw': (math.degrees(getattr(p, 'heading', 0) or 0)+360) % 360,
+                # 重投影中央的世界方位:實測(用戶+自動邊緣相關一致)= heading - 45。
+                # streetlevel 文件說「中央=行進反方向」,但 pano.heading 不是精確的行進向,
+                # 用戶在跑步機上看到「行進偏右 45°」→ 中央要左轉 45° = heading-45。
+                'yaw': (math.degrees(getattr(p, 'heading', 0) or 0)-45) % 360,
                 'date': str(p.date.date()) if p.date else None,
                 'links': ns[:60]}
     if op == 'pyramid':
