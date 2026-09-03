@@ -5,6 +5,7 @@
 import sys, json, io, os, math, time, traceback, threading
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
+import numpy as np
 import pillow_heif
 pillow_heif.register_heif_opener()
 from streetlevel import lookaround
@@ -14,6 +15,28 @@ os.makedirs(CACHE, exist_ok=True)
 auth = lookaround.Authenticator()
 tiles = {}          # (tx,ty) -> CoverageTile(記憶體快取)
 panos = {}          # id(str) -> pano 物件
+# 朝向場:pano.heading 亂翻、travelDir 轉彎會反,唯一可靠的是「影像本身」。
+# 相鄰全景重疊多、互相關很強(實測峰值 0.5-0.7),用它建立每顆的絕對朝向,
+# 從種子傳播、轉彎時正確跟著轉。orient=弧度,strip=地平線灰階條(相關用)。
+LA_ORIENT = {}      # id -> 朝向(度,相對種子)
+LA_STRIP = {}       # id -> np.array(512) 地平線條
+ORI_LOCK = threading.Lock()
+
+def build_strip(p):
+    with ThreadPoolExecutor(6) as ex:
+        raws = list(ex.map(lambda i: lookaround.get_panorama_face(p, i, zoom=5, auth=auth), range(6)))
+    faces = [Image.open(io.BytesIO(r)) for r in raws]
+    with REPRO_LOCK:
+        eq = lookaround.to_equirectangular(faces, p.camera_metadata).convert('L')
+    a = np.asarray(eq.resize((512, 256)), float)
+    return a[90:170].mean(0)   # 地平線帶,512 寬
+
+def rel_shift(a, b):
+    # b 相對 a 的水平位移(度);環狀正規化互相關
+    a = (a - a.mean()) / (a.std() + 1e-6); b = (b - b.mean()) / (b.std() + 1e-6)
+    c = [np.sum(a * np.roll(b, s)) for s in range(512)]
+    sh = int(np.argmax(c))
+    return ((sh if sh < 256 else sh - 512) / 512.0 * 360.0), (max(c) / 512.0)
 
 def cover(lat, lng):
     # 座標→涵蓋磚(z17),連同周圍一圈都抓,鄰居才不會斷在磚界
@@ -37,6 +60,52 @@ def dist(a_lat, a_lng, b_lat, b_lng):
     dx = (b_lng-a_lng)*math.cos(math.radians(a_lat))*111320
     dy = (b_lat-a_lat)*110540
     return math.hypot(dx, dy), (math.degrees(math.atan2(dx, dy))+360)%360
+
+def compute_orient(p):
+    # 每顆全景的絕對朝向(度)。相鄰全景互相關很強,從種子傳播、轉彎跟著轉。
+    # heading 亂翻、travelDir 轉彎會反 —— 只有影像本身可靠。
+    pid = str(p.id)
+    with ORI_LOCK:
+        if pid in LA_ORIENT: return LA_ORIENT[pid]
+        # 收集最近幾顆已定向鄰居(<15m),等一下逐一比對取峰值最高的
+        cand = []
+        for q in panos.values():
+            qid = str(q.id)
+            if qid == pid or qid not in LA_ORIENT or qid not in LA_STRIP: continue
+            d, _ = dist(p.lat, p.lon, q.lat, q.lon)
+            if d < 15: cand.append((d, qid))
+        cand.sort(key=lambda x: x[0]); cand = cand[:4]
+        refs = [(qid, LA_ORIENT[qid], LA_STRIP[qid]) for _, qid in cand]
+    try:
+        strip = build_strip(p)
+    except Exception:
+        strip = None
+    ori = None
+    if refs and strip is not None:
+        # 對每顆鄰居算相對位移,取峰值最高那個
+        scored = []
+        for qid, qori, qstrip in refs:
+            sh, pk = rel_shift(qstrip, strip)
+            scored.append((pk, sh, qori))
+        # 只看位移合理(<60°)的候選 —— 相鄰 10m 全景真實轉角很小,
+        # 大位移必是建築 180° 對稱之類的假峰(會造成整個畫面反過來)。
+        ok = [(pk, sh, qori) for pk, sh, qori in scored if abs(sh) < 60 and pk > 0.3]
+        if ok:
+            ok.sort(reverse=True)
+            pk, sh, qori = ok[0]
+            ori = (qori + sh) % 360
+        else:
+            # 沒有合理候選:沿用最近鄰居的朝向(場平滑,寧可不動也不要亂翻)
+            ori = scored[0][2] % 360
+    with ORI_LOCK:
+        if pid in LA_ORIENT: return LA_ORIENT[pid]   # 併發時別人算好了
+        if ori is None: ori = 0.0                    # 種子(client 用 travelDir 錨定)
+        LA_ORIENT[pid] = ori
+        if strip is not None: LA_STRIP[pid] = strip
+        if len(LA_ORIENT) > 4000:
+            for k in list(LA_ORIENT.keys())[:1000]:
+                LA_ORIENT.pop(k, None); LA_STRIP.pop(k, None)
+        return ori
 
 def handle(req):
     op = req['op']
@@ -65,16 +134,10 @@ def handle(req):
                 ns.append({'id': str(q.id), 'lat': q.lat, 'lng': q.lon,
                            'd': round(d, 1), 'heading': round(brg, 1)})
         ns.sort(key=lambda x: x['d'])
-        # 上限放大:點距約 4m,只留 24 顆全擠在 10m 內,Node 端稀釋成 13m 步距時
-        # 挑不到 13m 的候選(實測步距仍是 4m、跑不順)。留到 60 顆才涵蓋到 ~18m。
-        # 重投影後等距柱狀圖的「正中央 = 行進反方向」(streetlevel 文件明載)。
-        # 引擎的 meta.yaw 要填「影像中央的世界方位」,所以是 heading+180,不是 heading。
-        # 並排 Google/Apple 全景比對確認(之前填 heading 差 180°,看的是正後方)。
+        # 上限放大:點距約 4m,留 60 顆涵蓋 ~18m,Node 端稀釋步距才挑得到候選。
+        yaw = compute_orient(p)   # 影像互相關建立的絕對朝向(轉彎會正確跟著轉)
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
-                # 重投影中央的世界方位:實測(用戶+自動邊緣相關一致)= heading - 45。
-                # streetlevel 文件說「中央=行進反方向」,但 pano.heading 不是精確的行進向,
-                # 用戶實測:heading-45 反而更偏(90°),故是 heading+45。仍可 [ ] 微調。
-                'yaw': 0,   # 用不到:client 用平滑的 travelDir 當基準
+                'yaw': yaw,
                 'date': str(p.date.date()) if p.date else None,
                 'links': ns[:60]}
     if op == 'pyramid':
