@@ -18,6 +18,60 @@ import { moreImages, wikiNearby, citySpots } from './wiki.mjs';
 // 景點資料沿用 run-world 那份（745 個，12 個城市，含導覽稿）。
 // 直接讀原檔而不是複製一份 —— 那邊修了座標這邊立刻同步。
 // 讀不到就當成沒有景點，不影響跑步。
+// ── Apple Look Around 資料層 ────────────────────────────────
+// 雙源:pano id 是純數字(Apple 的 64 位元 id)就走這層,其餘走 Google。
+// Python worker(tools/apple-worker.py)負責涵蓋查詢/HEIC 解碼/重投影/切磚,
+// 磚塔切成跟 Google 一樣的幾何,引擎端零改動。
+const ROOT_DIR = fileURLToPath(new URL('.', import.meta.url));
+const LA_CACHE = join(ROOT_DIR, '.lacache');
+const isApple = id => /^\d{12,}$/.test(String(id || ''));
+const LA_GEOM = { h: 3328, w: 6656, tile: 512, zooms: [
+  { w: 416, h: 208 }, { w: 832, h: 416 }, { w: 1664, h: 832 },
+  { w: 3328, h: 1664 }, { w: 6656, h: 3328 }, { w: 6656, h: 3328 }] };  // z5=z4:畫質選 5 也不爆
+let AW = null, awRid = 0; const awPend = new Map();
+async function awEnsure() {
+  if (AW && !AW.killed && AW.exitCode == null) return;
+  const { spawn } = await import('node:child_process');
+  AW = spawn(join(ROOT_DIR, '.laenv', 'bin', 'python'),
+    [join(ROOT_DIR, 'tools', 'apple-worker.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let buf = '';
+  AW.stdout.on('data', d => {
+    buf += d;
+    let i2;
+    while ((i2 = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i2); buf = buf.slice(i2 + 1);
+      try { const m = JSON.parse(line);
+        if (awPend.has(m.rid)) { awPend.get(m.rid)(m); awPend.delete(m.rid); } } catch {}
+    }
+  });
+  AW.stderr.on('data', d => { const t = String(d); if (/Error|error/.test(t)) console.log('apple-worker:', t.slice(0, 200)); });
+  AW.on('exit', c => { console.log('apple-worker 退出', c); for (const f of awPend.values()) f({ error: 'worker-died' }); awPend.clear(); });
+  console.log('apple-worker 啟動');
+}
+// 開機就暖:先跑一次涵蓋查詢,首位使用者不吃冷啟動的數十秒
+awEnsure().then(() => apple('find', { lat: 25.0330, lng: 121.5654 }, 90000)
+  .then(() => console.log('apple-worker 暖機完成')).catch(() => {}));
+async function apple(op, params, timeoutMs = 60000) {
+  await awEnsure();
+  const rid = ++awRid;
+  return new Promise(res2 => {
+    const t = setTimeout(() => { awPend.delete(rid); res2({ error: 'worker-timeout' }); }, timeoutMs);
+    awPend.set(rid, m => { clearTimeout(t); res2(m); });
+    AW.stdin.write(JSON.stringify({ op, ...params, rid }) + '\n');
+  });
+}
+// 鄰居雲 → 連結:同點多趟拍攝(<2.5m)先剔掉,每 30° 扇區留最近的一顆
+function laLinks(ns) {
+  const sec = {};
+  for (const n of ns || []) {
+    if (n.d < 2.5 || n.d > 16) continue;
+    const k = Math.round(n.heading / 30) % 12;
+    if (!sec[k] || n.d < sec[k].d) sec[k] = n;
+  }
+  return Object.values(sec).map(n => ({ id: n.id, heading: n.heading, lat: n.lat, lng: n.lng, dz: 0, d: n.d }));
+}
+const laMeta = new Map();   // id -> {lat,lng}(meta/tile 要回頭找座標用)
+
 const LM_PATH = join(fileURLToPath(new URL('.', import.meta.url)),
                      '..', 'run-world', 'data', 'landmarks-extra.json');
 let LANDMARKS = [], AUDIDX = {}, PHOTOS = {};
@@ -325,6 +379,12 @@ const handler = async (req, res) => {
       // 常常不在路上 —— 60 公尺找不到不代表附近沒有街景。
       const want = Number(u.searchParams.get('r')) || 50;
       for (const rad of [want, want * 3, want * 6]) {
+        if (u.searchParams.get('src') === 'apple') {
+          const j = await apple('find', { lat, lng, r: rad }, 90000);
+          if (j.error) return json(res, { error: j.error === 'no-coverage' ? '這裡沒有 Look Around' : '附近找不到 Look Around' }, 404);
+          laMeta.set(j.id, { lat: j.lat, lng: j.lng });
+          return json(res, { pano: j.id, lat: j.lat, lng: j.lng, d: j.d });
+        }
         const r = await findPano(lat, lng, rad);
         if (!r) continue;
         // 順便回傳落點座標，呼叫端才知道吸到哪、差多遠
@@ -1303,8 +1363,35 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
       return json(res, { cells: out, total: out.reduce((a, b) => a + b.n, 0) });
     }
     if (u.pathname === '/api/meta') {
-      const m = await panoMeta(u.searchParams.get('pano'));
+      const id = u.searchParams.get('pano');
+      if (isApple(id)) {
+        const known = laMeta.get(id) || {};
+        const j = await apple('meta', { id, lat: known.lat, lng: known.lng });
+        if (j.error) return json(res, { error: j.error }, 404);
+        for (const n of j.links || []) laMeta.set(n.id, { lat: n.lat, lng: n.lng });
+        laMeta.set(id, { lat: j.lat, lng: j.lng });
+        if (laMeta.size > 5000) for (const k of [...laMeta.keys()].slice(0, 1000)) laMeta.delete(k);
+        apple('pyramid', { id, lat: j.lat, lng: j.lng }, 120000);   // 先開工,磚塊端點會等它
+        return json(res, { pano: id, lat: j.lat, lng: j.lng, el: 0, yaw: j.yaw,
+          date: j.date ? [+j.date.slice(0, 4), +j.date.slice(5, 7)] : null,
+          eras: [], indoor: false, car: true, floor: null, below: false,
+          geom: LA_GEOM, links: laLinks(j.links) });
+      }
+      const m = await panoMeta(id);
       return json(res, m || { error: '查不到這顆全景' }, m ? 200 : 404);
+    }
+    // Apple 磚塊:worker 切好放 .lacache,沒切完就等它(引擎抓磚有 8 秒逾時+重試)
+    if (u.pathname === '/atile') {
+      const id = u.searchParams.get('pano');
+      const z = Math.max(2, Math.min(4, +u.searchParams.get('z') || 2));
+      const x = +u.searchParams.get('x') || 0, y = +u.searchParams.get('y') || 0;
+      const f = join(LA_CACHE, id, `${z}_${x}_${y}.jpg`);
+      const send = b => { res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=604800' }); res.end(b); };
+      try { return send(await readFile(f)); } catch {}
+      const known = laMeta.get(id) || {};
+      const j = await apple('pyramid', { id, lat: known.lat, lng: known.lng }, 90000);
+      if (j.error) return json(res, { error: j.error }, 404);
+      try { return send(await readFile(f)); } catch { return json(res, { error: '切磚失敗' }, 404); }
     }
     // 靜態檔。normalize + 前綴檢查擋掉 ../ 跳出去
     const p = normalize(join(ROOT, u.pathname === '/' ? 'index.html' : u.pathname));

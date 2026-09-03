@@ -354,7 +354,10 @@ const upscale = (bm, size) => {
 
 let netBytes = 0;
 const fetchTile = async (pano, x, y, z) => {
-  const u = 'https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile'
+  // Apple 全景 id 是純數字 → 磚塊走自家 /atile(worker 重投影+切磚)
+  const u = /^\d{12,}$/.test(String(pano))
+    ? `/atile?pano=${pano}&x=${x}&y=${y}&z=${z}`
+    : 'https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile'
     + `&panoid=${pano}&x=${x}&y=${y}&zoom=${z}&nbt=1&fover=2`;
   // 一定要有逾時。瀏覽器的 fetch 沒有預設逾時，連線掛住就永遠不回 ——
   // 而 stepOnce 是 await 它的，整個跑步迴圈會靜靜停住不動，也沒有錯誤訊息。
@@ -2687,11 +2690,12 @@ function updateAttr() {
   const el = document.getElementById('attr');
   if (!el) return;
   const d = S.cur?.meta?.date;
+  const ap = S.src === 'apple';
   el.textContent = EN_UI
-    ? 'Imagery © Google Street View' + (d ? ` (captured ${d[1]}/${d[0]})` : '')
-      + '   Map © OpenStreetMap'
-    : '影像 © Google 街景服務' + (d ? `（${d[0]} 年 ${d[1]} 月拍攝）` : '')
-      + '　地圖 © OpenStreetMap';
+    ? `Imagery © ${ap ? 'Apple Look Around' : 'Google Street View'}`
+      + (d ? ` (captured ${d[1]}/${d[0]})` : '') + '   Map © OpenStreetMap'
+    : `影像 © ${ap ? 'Apple Look Around' : 'Google 街景服務'}`
+      + (d ? `（${d[0]} 年 ${d[1]} 月拍攝）` : '') + '　地圖 © OpenStreetMap';
 }
 
 // ── 左下角小地圖 ──────────────────────────────────────────────
@@ -2861,7 +2865,7 @@ async function detourTo(lm) {
   let t = { lat: lm.lat, lng: lm.lng, lm };
   S.note = `⌖ 找 ${lm.name} 的路…`; draw();
   try {
-    const r = await (await fetch(`/api/find?ll=${lm.lat},${lm.lng}&r=60`,
+    const r = await (await fetch(`/api/find?${S.src === 'apple' ? 'src=apple&' : ''}ll=${lm.lat},${lm.lng}&r=60`,
       { signal: AbortSignal.timeout(8000) })).json();
     if (r.lat) t = { lat: r.lat, lng: r.lng, lm };
   } catch {}
@@ -3135,7 +3139,7 @@ async function lateralHop(side) {
     const want = ((S.travelDir + sign * 90) % 360 + 360) % 360;
     for (const dist of [12, 22, 34]) {
       const p = destPoint(m.lat, m.lng, want, dist);
-      const f = await (await fetch(`/api/find?ll=${p.lat},${p.lng}&r=18`)).json();
+      const f = await (await fetch(`/api/find?${S.src === 'apple' ? 'src=apple&' : ''}ll=${p.lat},${p.lng}&r=18`)).json();
       if (f.error || !f.pano || f.pano === m.pano) continue;
       const nm = await (await fetch('/api/meta?pano=' + f.pano)).json();
       if (nm.error || !nm.links.length) continue;
@@ -3491,6 +3495,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.has('top')) S.topDeg = +q.get('top');
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
+  if (q.get('src') === 'apple') S.src = 'apple';   // 影像來源:Apple Look Around
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中
@@ -3554,7 +3559,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   }
   if (!pano) {
     const ll = q.get('ll') || '35.52326,138.74587';       // 預設：大石公園
-    const f = await (await fetch('/api/find?ll=' + encodeURIComponent(ll))).json();
+    const f = await (await fetch(`/api/find?${S.src === 'apple' ? 'src=apple&' : ''}ll=` + encodeURIComponent(ll))).json();
     if (f.error) { hud.textContent = f.error; return; }
     pano = f.pano;
   }

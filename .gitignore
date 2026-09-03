@@ -6,3 +6,5 @@ node_modules/
 .wikicache/
 .maptiles/
 cert/
+.laenv/
+.lacache/

@@ -315,7 +315,7 @@ async function snap(i) {
   el('start').disabled = true;
   el('step').textContent = p.lm ? `找「${p.lm.name}」最近的街景…` : '看看那裡有沒有街景…';
   try {
-    const r = await fetch(`/api/find?ll=${p.lat},${p.lng}&r=60`).then(x => x.json());
+    const r = await fetch(`/api/find?${SRC ? 'src=apple&' : ''}ll=${p.lat},${p.lng}&r=60`).then(x => x.json());
     if (r.error || !r.lat) {
       el('step').textContent = '⚠ 這附近沒有街景，換個點。';
       pts.splice(i, 1); drawInk(); return;
@@ -590,6 +590,7 @@ el('start').onclick = () => {
     ...(el('sakura') && el('sakura').checked ? { season: 'sakura' }
        : el('lockmonth') && el('lockmonth').value ? { months: el('lockmonth').value } : {}),
     run: '1',
+    ...(SRC ? { src: 'apple' } : {}),
   });
   location.href = '/run.html?' + p + langQ();
 };
@@ -598,6 +599,25 @@ el('zin').onclick = () => zoomBy(1);
 el('zout').onclick = () => zoomBy(-1);
 
 renderRuns();
+// 影像來源:Google 街景(預設)或 Apple Look Around(台灣畫質好、街景新,
+// 但沒有歷史影像 → 時光機/櫻花模式只有 Google 有)
+let SRC = localStorage.getItem('pano-src') === 'apple' ? 'apple' : '';
+{
+  const b = el('srcbtn');
+  if (b) {
+    const paint = () => {
+      b.textContent = SRC ? '🍎 Apple 街景' : '🌐 Google 街景';
+      b.style.borderColor = SRC ? '#e08030' : '';
+    };
+    paint();
+    b.onclick = () => {
+      SRC = SRC ? '' : 'apple';
+      localStorage.setItem('pano-src', SRC || 'google');
+      paint();
+    };
+  }
+}
+
 // 器材配對:在這裡 requestDevice 一次,Chrome 記住授權;
 // 跑步頁開跑用 getDevices() 直連,不再跳選擇視窗(使用者要求移到主選單)
 {
