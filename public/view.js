@@ -1166,6 +1166,11 @@ function bcast() {
       .then(r => r.json())
       .then(j => {
         // 有側屏連著:本機自動只畫中間片;都走了就恢復畫全部
+        // 三螢幕時主機關小地圖(左螢幕有大張的,主畫面留乾淨);側機走光恢復
+        if (j.n > 0 && S.mini && !S.miniOff3) {
+          S.miniOff3 = true; S.mini = false;
+          const cvm = $('minimap'); if (cvm) cvm.classList.remove('on');
+        } else if (j.n === 0 && S.miniOff3) { S.miniOff3 = false; S.mini = true; }
         if (j.n > 0 && S.panelIdx === null) {
           S.panelIdx = 1; S.autoPanel = true;
           // 三機模式要分片:Panini 不分片,主機也得切回直線透視的中央片,
