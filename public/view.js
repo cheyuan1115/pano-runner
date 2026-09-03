@@ -3433,7 +3433,7 @@ addEventListener('keydown', e => {
   // 只改「顯示朝向」,不影響行進方向(道路照跑)。改了要重載目前這顆才套用新 yaw。
   else if (e.key === '\\' && S.src === 'apple') {   // 整體前後翻 180°(反著走時按一下)
     S.aflip = (S.aflip + 180) % 360;
-    localStorage.setItem('pano-aflip', S.aflip);
+    localStorage.setItem('pano-aflip2', S.aflip);
     S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
     S.note = `🔄 前後翻轉(${S.aflip ? '反' : '正'})`;
     S.noteHold = Date.now() + 4000; draw();
@@ -3441,7 +3441,7 @@ addEventListener('keydown', e => {
   else if ((e.key === '[' || e.key === ']') && S.src === 'apple') {   // 微調 5°
     const d = e.key === ']' ? 5 : -5;
     S.aflip = ((S.aflip + d) % 360 + 360) % 360;
-    localStorage.setItem('pano-aflip', S.aflip);
+    localStorage.setItem('pano-aflip2', S.aflip);
     S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
     S.note = `🧭 方位微調 ${S.aflip > 180 ? S.aflip - 360 : S.aflip}°`;
     S.noteHold = Date.now() + 4000; draw();
@@ -3521,7 +3521,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
   S.ayaw = 0;                                  // 種子:首顆朝行進方向選邊
-  S.aflip = +localStorage.getItem('pano-aflip') || 0;   // 整體前後(0 或 180),\\ 鍵切換記住
+  S.aflip = localStorage.getItem('pano-aflip2') != null ? +localStorage.getItem('pano-aflip2') : 180;   // 整體前後(預設180=正前);\\ 鍵切換記住
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中
