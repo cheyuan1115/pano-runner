@@ -3433,7 +3433,7 @@ addEventListener('keydown', e => {
   else if ((e.key === '[' || e.key === ']') && S.src === 'apple') {
     const d = e.key === ']' ? 5 : -5;
     S.ayaw = ((S.ayaw + d) % 360 + 360) % 360;
-    localStorage.setItem('pano-ayaw2', S.ayaw);
+    localStorage.setItem('pano-ayaw3', S.ayaw);
     followCache.clear();
     if (S.cur?.meta) S.cur.meta.yaw = ((S.cur.meta.yaw + d) % 360 + 360) % 360;
     dropQueue(); fillQueue();             // 佇列裡的預抓也用新偏移重載,整段立刻套用
@@ -3514,7 +3514,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
-  S.ayaw = q.has('ayaw') ? +q.get('ayaw') : (localStorage.getItem('pano-ayaw2') != null ? +localStorage.getItem('pano-ayaw2') : 180);   // Apple 方位偏移(基準=行進方向;[ ] 微調記住)
+  S.ayaw = q.has('ayaw') ? +q.get('ayaw') : (localStorage.getItem('pano-ayaw3') != null ? +localStorage.getItem('pano-ayaw3') : 0);   // Apple 方位偏移(基準=行進方向,0=正前;[ ] 微調記住)
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中
