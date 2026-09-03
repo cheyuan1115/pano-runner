@@ -454,12 +454,17 @@ const mkPano = () => ({ meta: null, texBase: mkTex(), texDet: mkTex(),
                         baseScale: [1, 1], det: null, tiles: 0 });
 
 async function load(P, panoId, heading) {
+  // metaDone:meta 一到手就 resolve(不等磚塊)。fillLoop 只需要 meta 就能排
+  // 下一顆 —— Apple 每顆磚塊要 2.4s,序列等全載完根本堆不出預抓緩衝(卡頓根因)。
+  if (!P.metaDone) P.metaDone = new Promise(r => { P._metaRes = r; });
+  const metaOk = () => { if (P._metaRes) { P._metaRes(true); P._metaRes = null; } };
+  const metaFail = () => { if (P._metaRes) { P._metaRes(false); P._metaRes = null; } };
   let meta;
   try {
     meta = await (await fetch('/api/meta?pano=' + encodeURIComponent(panoId),
       { signal: AbortSignal.timeout(12000) })).json();
-  } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; return false; }
-  if (meta.error) { S.note = meta.error; return false; }
+  } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; metaFail(); return false; }
+  if (meta.error) { S.note = meta.error; metaFail(); return false; }
   // Apple:pano.heading 不可靠(來回兩趟差 180、還有 25-85° 誤差),
   // 2D 格點也沒有可靠的「每顆固定方位」。改用平滑的行進方向(進入這顆的
   // travelDir = load 的 heading 參數)當基準 —— 直路上穩定不擺(實測)。
@@ -490,6 +495,7 @@ async function load(P, panoId, heading) {
     }
   }
   P.meta = meta; P.det = null; P.tiles = 0;
+  metaOk();   // meta 就緒 → fillLoop 可以排下一顆了(磚塊在下面繼續背景載)
 
   const TSb = meta.geom.tile, gb = meta.geom.zooms[BASE_ZOOM];
   const cb = Math.ceil(gb.w / TSb), rb = Math.ceil(gb.h / TSb);
@@ -888,7 +894,7 @@ async function fillLoop() {
     const last = queue[queue.length - 1];
     let meta, dir;
     if (last) {
-      await last.done;                       // 要有它的中繼資料才知道下一條連結
+      await (last.P.metaDone || last.done);   // 只等 meta(知道連到哪);磚塊背景並行載
       if (ep !== qEpoch) return;
       if (!last.P.meta) return;
       // 櫻花模式的年代黏著：連結圖在路口會跨年代相連，選路只看方位不知道
