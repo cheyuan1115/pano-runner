@@ -74,7 +74,7 @@ def handle(req):
                 # 重投影中央的世界方位:實測(用戶+自動邊緣相關一致)= heading - 45。
                 # streetlevel 文件說「中央=行進反方向」,但 pano.heading 不是精確的行進向,
                 # 用戶實測:heading-45 反而更偏(90°),故是 heading+45。仍可 [ ] 微調。
-                'yaw': (math.degrees(getattr(p, 'heading', 0) or 0)+45) % 360,
+                'yaw': 0,   # client 改用 travelDir 當基準,heading 不可靠(會亂翻180)
                 'date': str(p.date.date()) if p.date else None,
                 'links': ns[:60]}
     if op == 'pyramid':

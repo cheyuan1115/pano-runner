@@ -460,7 +460,11 @@ async function load(P, panoId, heading) {
       { signal: AbortSignal.timeout(12000) })).json();
   } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; return false; }
   if (meta.error) { S.note = meta.error; return false; }
-  if (S.src === 'apple' && S.ayaw) meta.yaw = ((meta.yaw + S.ayaw) % 360 + 360) % 360;
+  // Apple:pano.heading 是會亂翻 180° 的雜訊(實測),拿它算 yaw 畫面就忽左忽右。
+  // 改用「進入這顆的行進方向」(load 的 heading 參數,平滑不翻)+ 一個固定偏移。
+  // 固定偏移 S.ayaw 可用 [ ] 微調並記住。這樣相鄰全景朝向連續,不再擺動。
+  if (S.src === 'apple' && Number.isFinite(heading))
+    meta.yaw = ((heading + (S.ayaw || 0)) % 360 + 360) % 360;
   // 月份鎖：這顆不是目標月份拍的、而且時光機裡有 → 改載那個月份的版本。
   // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
   // 櫻花模式是它的特例（[4,3]:四月優先,三月備胎 —— 實測 2018/3 整條
@@ -3427,10 +3431,12 @@ addEventListener('keydown', e => {
   // Apple 方位微調:重投影中央方位有量測誤差,跑步中 [ 左轉 ] 右轉 5°,自動記住。
   // 只改「顯示朝向」,不影響行進方向(道路照跑)。改了要重載目前這顆才套用新 yaw。
   else if ((e.key === '[' || e.key === ']') && S.src === 'apple') {
-    S.ayaw = ((S.ayaw + (e.key === ']' ? 5 : -5)) % 360 + 360) % 360;
-    localStorage.setItem('pano-ayaw', S.ayaw);
-    followCache.clear();                 // 清快取,下一顆用新 yaw 重算
-    if (S.cur?.meta) S.cur.meta.yaw = ((S.cur.meta.yaw + (e.key === ']' ? 5 : -5)) % 360 + 360) % 360;
+    const d = e.key === ']' ? 5 : -5;
+    S.ayaw = ((S.ayaw + d) % 360 + 360) % 360;
+    localStorage.setItem('pano-ayaw2', S.ayaw);
+    followCache.clear();
+    if (S.cur?.meta) S.cur.meta.yaw = ((S.cur.meta.yaw + d) % 360 + 360) % 360;
+    dropQueue(); fillQueue();             // 佇列裡的預抓也用新偏移重載,整段立刻套用
     S.note = `🧭 方位微調 ${S.ayaw > 180 ? S.ayaw - 360 : S.ayaw}°([ ] 調整)`;
     S.noteHold = Date.now() + 4000; draw();
   }
@@ -3508,7 +3514,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
-  S.ayaw = q.has('ayaw') ? +q.get('ayaw') : (+localStorage.getItem('pano-ayaw') || 0);   // Apple 方位微調(可跑步中 [ ] 調整,自動記住)
+  S.ayaw = q.has('ayaw') ? +q.get('ayaw') : (localStorage.getItem('pano-ayaw2') != null ? +localStorage.getItem('pano-ayaw2') : 180);   // Apple 方位偏移(基準=行進方向;[ ] 微調記住)
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中
