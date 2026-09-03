@@ -30,6 +30,7 @@
 </style>
 <canvas id="gl"></canvas>
 <div id="hud" class="fold">載入中…</div>
+<div id="loc3"></div>
 <button id="vrbtn" style="display:none; position:fixed; right:12px; top:12px; z-index:9;
   padding:10px 22px; font-size:16px; font-weight:700; color:#fff; background:#4a5af8;
   border:0; border-radius:10px; cursor:pointer;" onclick="enterVR()">VR</button>
@@ -160,5 +161,12 @@ Shift+H　地平面模型
   #tune label { display: block; font-size: 12px; color: #c9ccd2; margin-top: 7px; }
   #tune b { float: right; color: #6fd08c; font-weight: 600; }
   #tune input { width: 100%; margin-top: 2px; accent-color: #2f7d4f; }
+</style>
+<style>
+  #loc3 { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 6;
+          display: none; font-size: 20px; color: #fff; letter-spacing: .5px;
+          background: rgba(16,17,21,.72); border: 1px solid #33373f; border-radius: 999px;
+          padding: 6px 16px; backdrop-filter: blur(8px); white-space: nowrap; }
+  #loc3.on { display: block; }
 </style>
 <script src="fit.js"></script><script src="view.js"></script>

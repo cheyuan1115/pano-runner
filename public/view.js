@@ -1209,6 +1209,27 @@ function bcast() {
   }
 }
 
+// 三螢幕時在主畫面置頂顯示「目前位置」文字 —— Gemini Live 只看得到分享的螢幕、
+// 看不到左螢幕的地圖,有這行字它就能直接讀到你在哪,不必靠街景猜。
+const LOC3 = { at: -1e9, lastKey: '' };
+async function updateLoc3() {
+  const el = document.getElementById('loc3');
+  if (!el) return;
+  const on = S.role === 'master' && S.autoPanel && S.cur?.meta;   // 側屏連上=三螢幕
+  if (!on) { el.classList.remove('on'); return; }
+  const m = S.cur.meta;
+  const key = m.lat.toFixed(3) + ',' + m.lng.toFixed(3);
+  if (key === LOC3.lastKey) return;            // 同一格不重查
+  if (S.moved - LOC3.at < 60) return;          // 最多每 60m 查一次
+  LOC3.at = S.moved; LOC3.lastKey = key;
+  try {
+    const j = await (await fetch(`/api/revgeo?ll=${m.lat},${m.lng}`,
+      { signal: AbortSignal.timeout(5000) })).json();
+    if (j.place) { el.textContent = '📍 ' + j.place; el.classList.add('on'); }
+  } catch {}
+}
+setInterval(updateLoc3, 3000);
+
 // 從屬端：照主控說的載入全景、套用狀態、畫出來
 const followCache = new Map();
 async function followPano(id, head) {

@@ -523,6 +523,25 @@ out geom qt 500;`;
     // 實測搜「星巴克」回了只對到一個「星」字的共同工作空間。
     // 對不上就請 Gemini 把名字翻成當地通用名稱再搜一次(翻過的記在 xlMem,
     // 免費額度有每分鐘上限,同名不重問)。
+    // 反查地名(三螢幕時畫面疊一行位置文字給 Gemini Live 讀 —— 它只看得到分享的
+    // 螢幕、看不到左螢幕的地圖,有這行字就不用靠街景猜位置)。重用 geoMem 快取。
+    if (u.pathname === '/api/revgeo') {
+      const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
+      if (!isFinite(lat) || !isFinite(lng)) return json(res, { error: 'll' }, 400);
+      const gk = lat.toFixed(3) + ',' + lng.toFixed(3);
+      if (geoMem.has(gk)) return json(res, { place: geoMem.get(gk) });
+      try {
+        const g = await (await fetch('https://nominatim.openstreetmap.org/reverse?format=json'
+          + `&lat=${lat}&lon=${lng}&zoom=17&accept-language=zh-TW`,
+          { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(4000) })).json();
+        const a = g.address || {};
+        const place = [a.city || a.town || a.county, a.suburb || a.neighbourhood, a.road]
+          .filter(Boolean).join(' ');
+        geoMem.set(gk, place);
+        if (geoMem.size > 500) geoMem.delete(geoMem.keys().next().value);
+        return json(res, { place });
+      } catch { return json(res, { place: '' }); }
+    }
     if (u.pathname === '/api/findplace') {
       const [lat, lng] = (u.searchParams.get('ll') || '').split(',').map(Number);
       const q = (u.searchParams.get('q') || '').trim();
