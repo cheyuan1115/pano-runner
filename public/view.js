@@ -460,11 +460,12 @@ async function load(P, panoId, heading) {
       { signal: AbortSignal.timeout(12000) })).json();
   } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; return false; }
   if (meta.error) { S.note = meta.error; return false; }
-  // Apple:worker 已填 Wc = pano.heading + 180(重投影影像中央的世界方位)。
-  // 每顆確定值,engine 用 S.heading - meta.yaw 自動補償來回兩趟的 180 差,
-  // 兩趟都朝正前方。aflip 是使用者微調(整體前後翻或 ±5°),預設 0。
-  if (S.src === 'apple' && Number.isFinite(meta.yaw))
-    meta.yaw = ((meta.yaw + S.aflip) % 360 + 360) % 360;
+  // Apple:pano.heading 不可靠(來回兩趟差 180、還有 25-85° 誤差),
+  // 2D 格點也沒有可靠的「每顆固定方位」。改用平滑的行進方向(進入這顆的
+  // travelDir = load 的 heading 參數)當基準 —— 直路上穩定不擺(實測)。
+  // S.aflip:整體前後(\ 鍵)+ 微調(預設 0 = 正前方)。
+  if (S.src === 'apple' && Number.isFinite(heading))
+    meta.yaw = ((heading + S.aflip) % 360 + 360) % 360;
   // 月份鎖：這顆不是目標月份拍的、而且時光機裡有 → 改載那個月份的版本。
   // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
   // 櫻花模式是它的特例（[4,3]:四月優先,三月備胎 —— 實測 2018/3 整條
