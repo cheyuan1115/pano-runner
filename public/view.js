@@ -3162,9 +3162,8 @@ const GG = { on: false, timer: 0 };
 function geminiGate(on) {
   GG.on = on;
   clearInterval(GG.timer);
-  // 對話期間整個讓出麥克風(不然 Gemini「聽取中」卻收到無聲);
-  // 巡邏用 onpause=close:它 2 分鐘沒聲音自暫停 = 你聊完了 → 自動收起、恢復語音
-  window.__voice?.hush?.(on);
+  // 同時監聽(使用者選擇):自家辨識不讓出麥克風,只認「呼叫AI」供隨時語音關閉;
+  // 巡邏保留:浮窗自暫停(聊完了)就收起、被關掉就恢復指令
   GG.off = 0; GG.err = 0; GG.busy = false;
   if (on) GG.timer = setInterval(async () => {
     if (GG.busy) return;              // 上一輪 OCR 還沒回來就跳過,別疊著跑
@@ -3220,8 +3219,8 @@ window.__turn = (cmd, text) => {
     S.note = T('✨ 呼叫 AI…', '✨ Summoning AI…'); draw();
     fetch('/api/gemini').then(r => r.json()).then(j => {
       S.note = j.action === 'closed' ? T('✨ AI 已關閉,語音指令恢復', '✨ AI dismissed — voice commands back')
-             : j.action === 'opened' ? T('✨ AI 上線,開聊吧(聊完停止說話它會自動收起)',
-                                          '✨ AI is live — stop talking for 2 min and it closes itself')
+             : j.action === 'opened' ? T('✨ AI 上線,開聊吧(說「呼叫AI」關閉)',
+                                          '✨ AI is live — say "call AI" to close')
              : '✨ ' + (j.error || '');
       // AI 對話中自家語音只留「呼叫AI」:兩支麥克風同時聽,
       // 你跟 Gemini 說「介紹一下…」會被自家當成指令(實際反饋)。
