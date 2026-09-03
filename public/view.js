@@ -1795,11 +1795,12 @@ function uploadTile(fn, now) {
 function pumpUploads(budget = 2) {
   while (budget-- > 0 && upQ.length) { try { upQ.shift()(); } catch {} }
 }
-// 非 VR 也要持續抽佇列 —— 動畫每幀會抽,但沒在動畫時(剛開跑、停等)也要排空
-(function pumpLoop() {
+// 非 VR 也要持續抽佇列 —— 動畫每幀會抽,但沒在動畫時(剛開跑、停等)也要排空。
+// 用 rAF 延後啟動:xr 在檔案後面才宣告,立即執行會踩到 TDZ(Cannot access 'xr')。
+requestAnimationFrame(function pumpLoop() {
   if (!xr.session && upQ.length) pumpUploads(4);
   requestAnimationFrame(pumpLoop);
-})();
+});
 
 // ── VR（WebXR）─────────────────────────────────────────────
 // 只有在 https 下 navigator.xr 才存在（Quest 的瀏覽器開 http 時直接是 undefined）。
