@@ -25,9 +25,11 @@ import { moreImages, wikiNearby, citySpots } from './wiki.mjs';
 const ROOT_DIR = fileURLToPath(new URL('.', import.meta.url));
 const LA_CACHE = join(ROOT_DIR, '.lacache');
 const isApple = id => /^\d{12,}$/.test(String(id || ''));
-const LA_GEOM = { h: 3328, w: 6656, tile: 512, zooms: [
+// 只做到 z3(3328):zoom=3 抓面的重投影快 3.5 倍,4560px 縮到 3328 仍銳利。
+// z4/z5 對映回 z3,畫質選高也不會要求做不出來的 6656。
+const LA_GEOM = { h: 1664, w: 3328, tile: 512, zooms: [
   { w: 416, h: 208 }, { w: 832, h: 416 }, { w: 1664, h: 832 },
-  { w: 3328, h: 1664 }, { w: 6656, h: 3328 }, { w: 6656, h: 3328 }] };  // z5=z4:畫質選 5 也不爆
+  { w: 3328, h: 1664 }, { w: 3328, h: 1664 }, { w: 3328, h: 1664 }] };
 let AW = null, awRid = 0; const awPend = new Map();
 async function awEnsure() {
   if (AW && !AW.killed && AW.exitCode == null) return;
@@ -60,15 +62,24 @@ async function apple(op, params, timeoutMs = 60000) {
     AW.stdin.write(JSON.stringify({ op, ...params, rid }) + '\n');
   });
 }
-// 鄰居雲 → 連結:同點多趟拍攝(<2.5m)先剔掉,每 30° 扇區留最近的一顆
+// 鄰居雲 → 連結。Apple 點距只有 5-7m,一顆一顆走每步都要重投影(2.2s)追不上,
+// 跑起來一步一停。所以稀釋成「約 13m 一步」(等於 Google 的點距):每 30° 扇區
+// 挑最接近 13m 的那顆,備圖數量砍半。扇區在 [4,18] 內沒點(稀疏處)才退回最近點。
 function laLinks(ns) {
-  const sec = {};
+  const near = {}, far = {};
   for (const n of ns || []) {
-    if (n.d < 2.5 || n.d > 16) continue;
+    if (n.d < 1.5 || n.d > 25) continue;
     const k = Math.round(n.heading / 30) % 12;
-    if (!sec[k] || n.d < sec[k].d) sec[k] = n;
+    if (!near[k] || n.d < near[k].d) near[k] = n;          // 保底:每扇區最近點
+    if (n.d >= 4 && n.d <= 18) {                            // 理想步距候選
+      const sc = Math.abs(n.d - 13);
+      if (!far[k] || sc < far[k].sc) far[k] = { ...n, sc };
+    }
   }
-  return Object.values(sec).map(n => ({ id: n.id, heading: n.heading, lat: n.lat, lng: n.lng, dz: 0, d: n.d }));
+  const pick = {};
+  for (const k of new Set([...Object.keys(near), ...Object.keys(far)]))
+    pick[k] = far[k] || near[k];
+  return Object.values(pick).map(n => ({ id: n.id, heading: n.heading, lat: n.lat, lng: n.lng, dz: 0, d: n.d }));
 }
 const laMeta = new Map();   // id -> {lat,lng}(meta/tile 要回頭找座標用)
 
@@ -383,6 +394,9 @@ const handler = async (req, res) => {
           const j = await apple('find', { lat, lng, r: rad }, 90000);
           if (j.error) return json(res, { error: j.error === 'no-coverage' ? '這裡沒有 Look Around' : '附近找不到 Look Around' }, 404);
           laMeta.set(j.id, { lat: j.lat, lng: j.lng });
+          // 起點先開切:回應前不等(不拖慢開跑),但下一顆 meta 來時起點圖多半好了,
+          // 冷啟動的頭幾步頓挫因此縮短
+          apple('pyramid', { id: j.id, lat: j.lat, lng: j.lng }, 120000).catch(() => {});
           return json(res, { pano: j.id, lat: j.lat, lng: j.lng, d: j.d });
         }
         const r = await findPano(lat, lng, rad);
@@ -1383,7 +1397,7 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
     // Apple 磚塊:worker 切好放 .lacache,沒切完就等它(引擎抓磚有 8 秒逾時+重試)
     if (u.pathname === '/atile') {
       const id = u.searchParams.get('pano');
-      const z = Math.max(2, Math.min(4, +u.searchParams.get('z') || 2));
+      const z = Math.max(2, Math.min(3, +u.searchParams.get('z') || 2));   // Apple 只切到 z3
       const x = +u.searchParams.get('x') || 0, y = +u.searchParams.get('y') || 0;
       const f = join(LA_CACHE, id, `${z}_${x}_${y}.jpg`);
       const send = b => { res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=604800' }); res.end(b); };

@@ -65,11 +65,12 @@ def handle(req):
                 ns.append({'id': str(q.id), 'lat': q.lat, 'lng': q.lon,
                            'd': round(d, 1), 'heading': round(brg, 1)})
         ns.sort(key=lambda x: x['d'])
-        # 每個方向留最近的:鄰居太多(5-7m 網格)時 Node 端選路會亂
+        # 上限放大:點距約 4m,只留 24 顆全擠在 10m 內,Node 端稀釋成 13m 步距時
+        # 挑不到 13m 的候選(實測步距仍是 4m、跑不順)。留到 60 顆才涵蓋到 ~18m。
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
                 'yaw': (math.degrees(getattr(p, 'heading', 0) or 0)+360) % 360,
                 'date': str(p.date.date()) if p.date else None,
-                'links': ns[:24]}
+                'links': ns[:60]}
     if op == 'pyramid':
         # 抓六面(並行)→ 重投影 → 縮放成 Google 尺寸的 z2/z3/z4 → 切 512 磚
         # 引擎照 Google 的 geom 幾何運作,磚塔做成一樣的形狀就零改動
@@ -83,8 +84,10 @@ def handle(req):
             p = panos.get(pid)
         if not p: return {'error': 'unknown-pano'}
         t0 = time.time()
+        # zoom=3 抓面:重投影 4.5s→1.3s(zoom=2 的重投影是元兇),輸出 4560px
+        # 拿來當 z3(3328)顯示綽綽有餘。只切 z2+z3,z4 顯示端對映到 z3。
         with ThreadPoolExecutor(6) as ex:
-            raws = list(ex.map(lambda i: lookaround.get_panorama_face(p, i, zoom=2, auth=auth), range(6)))
+            raws = list(ex.map(lambda i: lookaround.get_panorama_face(p, i, zoom=3, auth=auth), range(6)))
         faces = [Image.open(io.BytesIO(r)) for r in raws]
         tf = time.time()
         with REPRO_LOCK:   # torch 重投影一次一顆,兩顆並行會把記憶體吃爆
@@ -92,9 +95,9 @@ def handle(req):
         tr = time.time()
         os.makedirs(d, exist_ok=True)
         out = {'tile': 512, 'zooms': {}}
-        for z, w in ((2, 1664), (3, 3328), (4, 6656)):
+        for z, w in ((2, 1664), (3, 3328)):
             h = w // 2
-            im = eq.resize((w, h), Image.LANCZOS if w < eq.size[0] else Image.BICUBIC)
+            im = eq.resize((w, h), Image.LANCZOS)
             cols, rows = math.ceil(w / 512), math.ceil(h / 512)
             for cx in range(cols):
                 for cy in range(rows):

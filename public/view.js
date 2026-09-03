@@ -855,6 +855,7 @@ async function escapeIndoor(meta) {
 // 深度 2 剛好在打平邊緣 —— 同樣設定兩次實測一次 11.5 km/h、一次 8.9，差在網路抖動。
 // 加一層純粹是買緩衝，穩定的地方也不會多花（總量一樣，只是提早抓）。
 const DEPTH = 3;
+const depthNow = () => (S.src === 'apple' ? 4 : DEPTH);   // Apple 備圖慢但別太深:太多顆同時搶重投影鎖反而餓死當下要的那顆
 let queue = [];
 // 櫻花模式：已知「走過去會離開春天年代」的連結。上限 40，免得整區都被拉黑。
 const eraAvoid = new Set();
@@ -876,7 +877,7 @@ async function fillQueue() {
 
 async function fillLoop() {
   const ep = qEpoch;
-  while (queue.length < DEPTH) {
+  while (queue.length < depthNow()) {
     if (ep !== qEpoch) return;                 // 中途轉向了，這一批不要了
     const last = queue[queue.length - 1];
     let meta, dir;
@@ -3495,7 +3496,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.has('top')) S.topDeg = +q.get('top');
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
-  if (q.get('src') === 'apple') S.src = 'apple';   // 影像來源:Apple Look Around
+  if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中
