@@ -465,14 +465,11 @@ async function load(P, panoId, heading) {
       { signal: AbortSignal.timeout(12000) })).json();
   } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; metaFail(); return false; }
   if (meta.error) { S.note = meta.error; metaFail(); return false; }
-  // Apple:worker 用相鄰全景影像互相關算出「朝向場」(meta.yaw=相對種子的絕對朝向),
-  // 轉彎會正確跟著轉(pano.heading 亂翻、travelDir 轉彎會反,都不行)。
-  // 種子是任意的,用「第一顆的 travelDir」錨定成正前方;之後全靠朝向場。
-  // S.aflip:若整體反了按 \ 翻 180。
-  if (S.src === 'apple' && Number.isFinite(meta.yaw)) {
-    if (S.aAnchor == null && Number.isFinite(heading)) S.aAnchor = ad(heading, meta.yaw);
-    meta.yaw = ((meta.yaw + (S.aAnchor || 0) + S.aflip) % 360 + 360) % 360;
-  }
+  // Apple:worker 已填正確的 meta.yaw = (540 - heading) % 360
+  //(heading 是逆時針、轉順時針就是行車方向,+180 = 重投影中央 = 行車反方向)。
+  // 每顆確定值、轉彎自動對。aflip 只是保險微調(預設 0)。
+  if (S.src === 'apple' && Number.isFinite(meta.yaw))
+    meta.yaw = ((meta.yaw + S.aflip) % 360 + 360) % 360;
   // 月份鎖：這顆不是目標月份拍的、而且時光機裡有 → 改載那個月份的版本。
   // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
   // 櫻花模式是它的特例（[4,3]:四月優先,三月備胎 —— 實測 2018/3 整條

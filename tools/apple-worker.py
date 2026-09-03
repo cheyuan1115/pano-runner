@@ -135,7 +135,10 @@ def handle(req):
                            'd': round(d, 1), 'heading': round(brg, 1)})
         ns.sort(key=lambda x: x['d'])
         # 上限放大:點距約 4m,留 60 顆涵蓋 ~18m,Node 端稀釋步距才挑得到候選。
-        yaw = compute_orient(p)   # 影像互相關建立的絕對朝向(轉彎會正確跟著轉)
+        # Apple heading 是逆時針(0=北,90=西);轉順時針=(360-h),就是真實行車方向
+        # (實測與時間定序算出的行車方向吻合到 0.1°)。重投影中央=行車反方向=+180。
+        # → meta.yaw = (360 - h) + 180 = (540 - h) % 360。每顆確定值,轉彎自動對。
+        yaw = (540 - math.degrees(p.heading or 0)) % 360
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
                 'yaw': yaw,
                 'date': str(p.date.date()) if p.date else None,
