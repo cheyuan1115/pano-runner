@@ -509,7 +509,7 @@ async function load(P, panoId, heading) {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, x * TSb, y * TSb, gl.RGBA, gl.UNSIGNED_BYTE, bm);
       if (bm.close) bm.close();
       if (P === S.cur) draw();        // 邊載邊畫 —— 少了這行就要等整顆載完才有畫面
-    });
+    }, P === S.cur);
   });
 
   const w = tileWindow(meta, heading), TS = w.TS;
@@ -532,7 +532,7 @@ async function load(P, panoId, heading) {
       if (bm.close) bm.close();
       P.tiles++;
       if (P === S.cur) draw();
-    });
+    }, P === S.cur);
   });
   return true;
 }
@@ -1033,6 +1033,7 @@ async function stepOnce() {
     const t = performance.now();
     const tick = () => {
       frames++;
+      if (!xr.session && upQ.length) pumpUploads(3);   // 動畫中順手排空預抓上傳,別讓它堆到某幀爆掉
       const k = Math.min(1, (performance.now() - t) / span);
       // 平移用線性 —— 跑步是等速的。先前用 smoothstep 等於每步都慢快慢。
       S.tMove = d * k;
@@ -1785,13 +1786,20 @@ setInterval(() => {
 // 幾十塊會在同幾格畫面裡湧進來 —— 主執行緒一忙，XR 就掉幀，頭盔裡就是抖。
 // 排隊、每個 XR 幀最多貼兩塊。不在 VR 時直接貼（平面模式沒有 90Hz 的壓力）。
 const upQ = [];
-function uploadTile(fn) {
-  if (!xr.session) { fn(); return; }
+function uploadTile(fn, now) {
+  // 當前顯示中的全景要立即上傳(邊載邊畫);預抓的排隊,分散各影格,
+  // 否則預抓下一顆 Apple 全景的一大串同步 texSubImage2D 會凍住當前動畫 0.5s。
+  if (now && !xr.session) { fn(); return; }
   upQ.push(fn);
 }
 function pumpUploads(budget = 2) {
   while (budget-- > 0 && upQ.length) { try { upQ.shift()(); } catch {} }
 }
+// 非 VR 也要持續抽佇列 —— 動畫每幀會抽,但沒在動畫時(剛開跑、停等)也要排空
+(function pumpLoop() {
+  if (!xr.session && upQ.length) pumpUploads(4);
+  requestAnimationFrame(pumpLoop);
+})();
 
 // ── VR（WebXR）─────────────────────────────────────────────
 // 只有在 https 下 navigator.xr 才存在（Quest 的瀏覽器開 http 時直接是 undefined）。
