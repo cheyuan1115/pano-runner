@@ -73,8 +73,8 @@ def handle(req):
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
                 # 重投影中央的世界方位:實測(用戶+自動邊緣相關一致)= heading - 45。
                 # streetlevel 文件說「中央=行進反方向」,但 pano.heading 不是精確的行進向,
-                # 用戶在跑步機上看到「行進偏右 45°」→ 中央要左轉 45° = heading-45。
-                'yaw': (math.degrees(getattr(p, 'heading', 0) or 0)-45) % 360,
+                # 用戶實測:heading-45 反而更偏(90°),故是 heading+45。仍可 [ ] 微調。
+                'yaw': (math.degrees(getattr(p, 'heading', 0) or 0)+45) % 360,
                 'date': str(p.date.date()) if p.date else None,
                 'links': ns[:60]}
     if op == 'pyramid':
