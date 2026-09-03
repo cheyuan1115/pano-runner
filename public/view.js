@@ -3521,7 +3521,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
   S.ayaw = 0;                                  // 種子:首顆朝行進方向選邊
-  S.aflip = localStorage.getItem('pano-aflip2') != null ? +localStorage.getItem('pano-aflip2') : 180;   // 整體前後(預設180=正前);\\ 鍵切換記住
+  S.aflip = localStorage.getItem('pano-aflip2') != null ? +localStorage.getItem('pano-aflip2') : 0;   // 整體前後(預設0=正前,實測);\\ 鍵切換記住
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中

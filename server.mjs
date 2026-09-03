@@ -71,8 +71,8 @@ function laLinks(ns) {
     if (n.d < 1.5 || n.d > 25) continue;
     const k = Math.round(n.heading / 30) % 12;
     if (!near[k] || n.d < near[k].d) near[k] = n;          // 保底:每扇區最近點
-    if (n.d >= 4 && n.d <= 18) {                            // 理想步距候選
-      const sc = Math.abs(n.d - 13);
+    if (n.d >= 4 && n.d <= 14) {                            // 理想步距候選(接近 google ~10m)
+      const sc = Math.abs(n.d - 10);
       if (!far[k] || sc < far[k].sc) far[k] = { ...n, sc };
     }
   }
