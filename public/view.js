@@ -1787,9 +1787,9 @@ setInterval(() => {
 // 排隊、每個 XR 幀最多貼兩塊。不在 VR 時直接貼（平面模式沒有 90Hz 的壓力）。
 const upQ = [];
 function uploadTile(fn, now) {
-  // 當前顯示中的全景要立即上傳(邊載邊畫);預抓的排隊,分散各影格,
-  // 否則預抓下一顆 Apple 全景的一大串同步 texSubImage2D 會凍住當前動畫 0.5s。
-  if (now && !xr.session) { fn(); return; }
+  // 只有「跑步中、預抓非當前全景」才排隊分散上傳(避免凍住動畫 0.5s)。
+  // 沒在跑(開場載入、暫停)一律立即上傳 —— 不然開場第一顆卡在佇列不顯示。
+  if ((now || !S.running) && !xr.session) { fn(); return; }
   upQ.push(fn);
 }
 function pumpUploads(budget = 2) {
