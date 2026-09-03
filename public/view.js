@@ -866,7 +866,7 @@ async function escapeIndoor(meta) {
 // 深度 2 剛好在打平邊緣 —— 同樣設定兩次實測一次 11.5 km/h、一次 8.9，差在網路抖動。
 // 加一層純粹是買緩衝，穩定的地方也不會多花（總量一樣，只是提早抓）。
 const DEPTH = 3;
-const depthNow = () => (S.src === 'apple' ? 4 : DEPTH);   // Apple 備圖慢但別太深:太多顆同時搶重投影鎖反而餓死當下要的那顆
+const depthNow = () => (S.src === 'apple' ? 7 : DEPTH);   // Apple 備圖慢,預抓要深(metaDone 並行化後不會餓死當下那顆),多幾顆緩衝吸收偶發的慢
 let queue = [];
 // 櫻花模式：已知「走過去會離開春天年代」的連結。上限 40，免得整區都被拉黑。
 const eraAvoid = new Set();
