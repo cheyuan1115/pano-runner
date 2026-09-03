@@ -601,18 +601,19 @@ el('zout').onclick = () => zoomBy(-1);
 renderRuns();
 // 影像來源:Google 街景(預設)或 Apple Look Around(台灣畫質好、街景新,
 // 但沒有歷史影像 → 時光機/櫻花模式只有 Google 有)
-let SRC = localStorage.getItem('pano-src') === 'apple' ? 'apple' : '';
+let SRC = localStorage.getItem('pano-src2') === 'apple' ? 'apple' : '';   // 預設 Google(順、有深度圖);Apple 為輔
 {
   const b = el('srcbtn');
   if (b) {
     const paint = () => {
-      b.textContent = SRC ? '🍎 Apple 街景' : '🌐 Google 街景';
+      b.textContent = SRC ? '🍎 Apple（新影像·較不順）' : '🌐 Google 街景';
       b.style.borderColor = SRC ? '#e08030' : '';
+      b.title = SRC ? 'Apple Look Around：台灣畫質新，但轉彎/流暢度不如 Google' : 'Google 街景：順、方向準、跑步建議用這個';
     };
     paint();
     b.onclick = () => {
       SRC = SRC ? '' : 'apple';
-      localStorage.setItem('pano-src', SRC || 'google');
+      localStorage.setItem('pano-src2', SRC || 'google');
       paint();
     };
   }
@@ -709,6 +710,7 @@ function langQ() {
     '🌸 特色路線 ▸': '🌸 Special trails ▸',
     '🤖 AI 排路線': '🤖 AI plan a route',
     '🔥 鬧區': '🔥 Busy areas',
+    '🌐 Google 街景': 'Google Street View', '🍎 Apple（新影像·較不順）': 'Apple (newer, less smooth)',
     '器材（配對一次，開跑自動連）': 'Equipment (pair once, auto-connects on run)',
     '🚴 跑步機／練習台': '🚴 Treadmill / trainer', '♥ 心率': '♥ Heart rate',
     '🗿馬丘比丘': '🗿 Machu Picchu', '🐫吉薩金字塔': '🐫 Giza Pyramids',
