@@ -369,7 +369,7 @@ const fetchTile = async (pano, x, y, z) => {
   // 而 stepOnce 是 await 它的，整個跑步迴圈會靜靜停住不動，也沒有錯誤訊息。
   for (let k = 0; k < 3; k++) {
     try {
-      const r = await fetch(u, { signal: AbortSignal.timeout(S.src ? 25000 : 8000) });
+      const r = await fetch(u, { signal: AbortSignal.timeout(8000) });
       if (!r.ok) throw new Error(r.status);
       const b = await r.blob();
       netBytes += b.size;
@@ -816,12 +816,6 @@ function pickLink(meta, dir, wish) {
   // 那代表我們已經在地下街裡，交給下面的脫困處理。
   const out = cand.filter(l => !indoorIds.has(l.id));
   if (out.length) cand = out;
-  // 避開最近走過的幾顆 —— 密集區(行人全景、廣場)會在幾顆之間繞小圈,
-  // 那些點角度都算「往前」躲不掉,只能靠記憶避開(實測 Yandex 商場一帶繞圈)。
-  if (S.recentPanos && S.recentPanos.length) {
-    const fresh = cand.filter(l => !S.recentPanos.includes(l.id));
-    if (fresh.length) cand = fresh;
-  }
   // 櫻花模式：被驗出「會離開春天年代」的連結也濾掉（見 fillLoop 的回退）
   if (eraAvoid.size) {
     const inEra = cand.filter(l => !eraAvoid.has(l.id));
@@ -905,9 +899,7 @@ async function fillLoop() {
     const last = queue[queue.length - 1];
     let meta, dir;
     if (last) {
-      // Google 磚快、序列預抓本來就順(原始行為);只有慢來源(自架 worker 下載切磚)
-      // 才需要「只等 meta、磚塊背景並行載」的加速。Google 走原本的等全載完,穩。
-      await (S.src ? (last.P.metaDone || last.done) : last.done);
+      await (last.P.metaDone || last.done);   // 只等 meta(知道連到哪);磚塊背景並行載
       if (ep !== qEpoch) return;
       if (!last.P.meta) return;
       // 櫻花模式的年代黏著：連結圖在路口會跨年代相連，選路只看方位不知道
@@ -989,24 +981,7 @@ async function stepOnce() {
   if (xr.session) pumpUploads(1e9);
   S.lastMs = performance.now() - t0;
   S.waited += S.lastMs;
-  if (!ok) {
-    // 一顆載不起來(通常是 meta 網路瞬斷)先重試「同一顆」,不要清佇列換路 ——
-    // 清佇列+換路會把狀態搞亂、連鎖失敗(實測 Google 到處卡)。同顆重試幾次
-    // 大多能恢復;真的不行才停(再按開始重試)。
-    S.loadFail = (S.loadFail || 0) + 1;
-    if (S.loadFail <= 3) {
-      S.note = T(`⚠ 這顆載不起來,重試…(${S.loadFail})`, `⚠ Load failed, retrying… (${S.loadFail})`);
-      draw();
-      await sleep(400 * S.loadFail);
-      const P2 = mkPano();
-      const ok2 = await load(P2, link.id, S.watchLm ? bearingTo({ lat: link.lat, lng: link.lng }, S.watchLm) : link.heading);
-      if (ok2) { queue.unshift({ link, P: P2, done: Promise.resolve(true) }); S.loadFail = 0; return; }
-      return;                                   // 還是失敗,下一輪再重試(loadFail 已 +1)
-    }
-    S.note = T('⚠ 載入失敗,先暫停(再按開始重試)', '⚠ Load failed — paused (press start to retry)');
-    S.running = false; S.loadFail = 0; return;
-  }
-  S.loadFail = 0;
+  if (!ok) { S.note = '⚠ 下一顆載不起來'; S.running = false; return; }
   fillQueue();                                 // 不等它，讓它在背景補滿
 
   // 手擺速只在「最近有讀到控制器」時生效 —— 放下控制器 2.5 秒後
@@ -1101,7 +1076,6 @@ async function stepOnce() {
     if (RW.trail.length > 60) RW.trail.shift();
   }
   S.cur = P; S.nxt = null; S.mix = 0; S.tMove = 0;
-  if (P.meta) { (S.recentPanos = S.recentPanos || []).push(P.meta.pano); if (S.recentPanos.length > 6) S.recentPanos.shift(); }
   updateAttr();
   // 這一步進行中如果下過轉向指令，就不要用舊連結的角度覆寫方向
   if (seq === S.turnSeq) {
