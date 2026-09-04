@@ -74,7 +74,7 @@ def handle(req):
         raw = os.path.join(d + '.raw.jpg')
         os.makedirs(d, exist_ok=True)
         baidu.download_panorama(p, raw, zoom=4)      # 等距柱狀,已組好
-        eq = Image.open(raw).convert('RGB')
+        eq = Image.open(raw).convert('RGB').transpose(Image.FLIP_LEFT_RIGHT)  # 百度圖左右鏡像,翻正
         os.remove(raw)
         out = {'tile': 512, 'zooms': {}}
         for z, w in ((2, 2048), (3, 4096)):          # 都是 512 整數倍
