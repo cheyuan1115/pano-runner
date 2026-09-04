@@ -91,11 +91,24 @@ Things that were hard and are documented in code comments: shared-world dissolve
 
 ## Data sources & fair use
 
-- **Street View imagery** is fetched from Google's public tile endpoints **without an API key**. This is not covered by any Google license. The project exists for personal research and experimentation; **do not deploy it publicly or commercially**. If you need a legal footing, rebuild the view layer on the official Maps JavaScript API, or switch to openly-licensed imagery (Mapillary, KartaView).
-- **Landmarks** come from Wikidata/Wikipedia (CC BY-SA — attribution shown in the UI), photos from Wikimedia Commons, map tiles from OpenStreetMap/CARTO.
-- **TTS / Gemini** use your own API keys within your own quota.
+**Read this honestly.** The panorama imagery is fetched from each provider's internal tile endpoints **without an API key** — Google Street View, Apple Look Around, Baidu Totalview (百度全景, mainland China), Yandex Panorama (Russia / Central Asia / Türkiye), and Kakao (Korea). None of this is covered by any license from those providers. Every one of them offers an official, key-based, paid API, and their Terms of Service require you to go through it. **Bypassing the API to pull raw tiles violates each provider's ToS.** This is a gray area, and this project only exists as personal research.
 
-You are responsible for how you use this code.
+What that means, in plain terms:
+
+- **Legal nature.** Violating a ToS is primarily a civil matter (breach of the usage agreement), not a crime. The imagery is copyrighted by the respective providers.
+- **Personal, private, non-distributed use** (running on your own treadmill, viewing ephemerally, nothing saved in bulk) is low-risk in practice — but it is still against the ToS.
+- **Hard lines — do not cross:**
+  - ❌ **Do not deploy this publicly** for other people to use.
+  - ❌ **Do not redistribute the imagery** (a few screenshots for discussion is one thing; bulk downloading/re-hosting is not).
+  - ❌ **Do not commercialize it** or build a competing service.
+- **To be fully compliant**, rebuild the view layer on each provider's official paid API (keys, billing), or switch to **openly-licensed imagery** — [Mapillary](https://www.mapillary.com) or KartaView (CC-licensed, crowd-sourced; patchier coverage, mixed 360°/flat quality).
+
+Other data:
+
+- **Landmarks** come from Wikidata/Wikipedia (CC BY-SA — attribution shown in the UI), photos from Wikimedia Commons, map tiles from OpenStreetMap.
+- **Elevation** from Open-Meteo (free, no key). **TTS / Gemini** use your own API keys within your own quota.
+
+You are responsible for how you use this code. Keep it personal; don't cross the lines above.
 
 ## Support
 
