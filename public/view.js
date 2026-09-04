@@ -467,7 +467,7 @@ async function load(P, panoId, heading) {
   const metaFail = () => { if (P._metaRes) { P._metaRes(false); P._metaRes = null; } };
   let meta;
   try {
-    meta = await (await fetch('/api/meta?pano=' + encodeURIComponent(panoId),
+    meta = await (await fetch('/api/meta?pano=' + encodeURIComponent(panoId) + (S.src ? '&src=' + S.src : ''),
       { signal: AbortSignal.timeout(12000) })).json();
   } catch (e) { S.note = '⚠ 街景資料逾時，重試中'; metaFail(); return false; }
   if (meta.error) { S.note = meta.error; metaFail(); return false; }
@@ -490,7 +490,7 @@ async function load(P, panoId, heading) {
                       || b.year - a.year)[0];
     if (spring) {
       try {
-        const m2 = await (await fetch('/api/meta?pano=' + encodeURIComponent(spring.id),
+        const m2 = await (await fetch('/api/meta?pano=' + encodeURIComponent(spring.id) + (S.src ? '&src=' + S.src : ''),
           { signal: AbortSignal.timeout(12000) })).json();
         if (!m2.error && m2.geom && m2.links.length) {
           meta = m2;
@@ -3191,7 +3191,7 @@ async function lateralHop(side) {
       const p = destPoint(m.lat, m.lng, want, dist);
       const f = await (await fetch(`/api/find?${S.src ? 'src=' + S.src + '&' : ''}ll=${p.lat},${p.lng}&r=18`)).json();
       if (f.error || !f.pano || f.pano === m.pano) continue;
-      const nm = await (await fetch('/api/meta?pano=' + f.pano)).json();
+      const nm = await (await fetch('/api/meta?pano=' + f.pano + (S.src ? '&src=' + S.src : ''))).json();
       if (nm.error || !nm.links.length) continue;
       // 落點那條路要真的往我們想去的方向，不然只是跳到同一條街的隔壁而已
       const good = nm.links.find(l => Math.abs(ad(l.heading, want)) < 50);
@@ -3637,7 +3637,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   }
   // 先只拿中繼資料決定朝向，再照那個朝向載磚塊。
   // 先前是「用朝向 0 載一次、再用真朝向載一次」，等於把起動的等待時間加倍。
-  const m0 = await (await fetch('/api/meta?pano=' + encodeURIComponent(pano))).json();
+  const m0 = await (await fetch('/api/meta?pano=' + encodeURIComponent(pano) + (S.src ? '&src=' + S.src : ''))).json();
   if (m0.error) { hud.textContent = m0.error; return; }
   if (S.rail) {
     const i = S.rail.indexOf(pano);

@@ -1526,7 +1526,8 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
     }
     if (u.pathname === '/api/meta') {
       const id = u.searchParams.get('pano');
-      if (isKakao(id)) {
+      const src = u.searchParams.get('src');   // 明確指定來源,別靠 id 猜(Google id 含 _ 會被誤判成 Yandex)
+      if (src === 'kakao') {
         const j = await kakaoRpc('meta', { id });
         if (j.error) return json(res, { error: j.error }, 404);
         for (const n of j.links || []) kkMeta.set(n.id, { lat: n.lat, lng: n.lng });
@@ -1538,7 +1539,7 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
           eras: [], indoor: false, car: true, floor: null, below: false,
           geom: KK_GEOM, links: j.links });
       }
-      if (isYandex(id)) {
+      if (src === 'yandex') {
         const j = await yandexRpc('meta', { id });
         if (j.error) return json(res, { error: j.error }, 404);
         for (const n of j.links || []) yxMeta.set(n.id, { lat: n.lat, lng: n.lng });
@@ -1550,7 +1551,7 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
           eras: [], indoor: false, car: true, floor: null, below: false,
           geom: YX_GEOM, links: j.links });
       }
-      if (isBaidu(id)) {
+      if (src === 'baidu') {
         const known = bdMeta.get(id) || {};
         const j = await baidu('meta', { id });
         if (j.error) return json(res, { error: j.error }, 404);
@@ -1563,7 +1564,7 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
           eras: [], indoor: false, car: true, floor: null, below: false,
           geom: BD_GEOM, links: j.links });
       }
-      if (isApple(id)) {
+      if (src === 'apple') {
         const known = laMeta.get(id) || {};
         const j = await apple('meta', { id, lat: known.lat, lng: known.lng });
         if (j.error) return json(res, { error: j.error }, 404);
