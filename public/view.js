@@ -3476,11 +3476,11 @@ addEventListener('keydown', e => {
     S.noteHold = Date.now() + 4000; draw();
   }
   else if ((e.key === '[' || e.key === ']') && (S.src === 'apple' || S.src === 'baidu')) {   // 微調 5°
-    const d = e.key === ']' ? 5 : -5;
+    const d = e.key === ']' ? 15 : -15;
     S.aflip = ((S.aflip + d) % 360 + 360) % 360;
     localStorage.setItem('pano-aflip2', S.aflip);
     S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
-    S.note = `🧭 方位微調 ${S.aflip > 180 ? S.aflip - 360 : S.aflip}°`;
+    S.note = `🧭 方位微調 ${S.aflip > 180 ? S.aflip - 360 : S.aflip}°([ ]±15 \\翻180)`;
     S.noteHold = Date.now() + 4000; draw();
   }
   // 上緣檔位如果被視窗上限夾住、畫面跟現在一樣，就直接跳下一檔 ——

@@ -59,7 +59,7 @@ def handle(req):
         for n in (p.neighbors or []):
             if getattr(n, 'lat', None): pass
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
-                'yaw': (90 - math.degrees(p.heading or 0)) % 360,   # GPano:中央方位=90-heading(讀 streetlevel 組圖碼)
+                'yaw': (270 - math.degrees(p.heading or 0)) % 360,   # GPano 中央=90-heading;用戶實測反的→+180
                 'date': str(p.date.date()) if p.date else None,
                 'street': getattr(p, 'street_name', '') or '',
                 'links': links_of(p)}
@@ -74,7 +74,7 @@ def handle(req):
         raw = os.path.join(d + '.raw.jpg')
         os.makedirs(d, exist_ok=True)
         baidu.download_panorama(p, raw, zoom=4)      # 等距柱狀,已組好
-        eq = Image.open(raw).convert('RGB').transpose(Image.FLIP_LEFT_RIGHT)  # 百度圖左右鏡像,翻正
+        eq = Image.open(raw).convert('RGB')
         os.remove(raw)
         out = {'tile': 512, 'zooms': {}}
         for z, w in ((2, 2048), (3, 4096)):          # 都是 512 整數倍
