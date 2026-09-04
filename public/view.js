@@ -369,7 +369,7 @@ const fetchTile = async (pano, x, y, z) => {
   // 而 stepOnce 是 await 它的，整個跑步迴圈會靜靜停住不動，也沒有錯誤訊息。
   for (let k = 0; k < 3; k++) {
     try {
-      const r = await fetch(u, { signal: AbortSignal.timeout(8000) });
+      const r = await fetch(u, { signal: AbortSignal.timeout(S.src ? 25000 : 8000) });
       if (!r.ok) throw new Error(r.status);
       const b = await r.blob();
       netBytes += b.size;
@@ -981,7 +981,20 @@ async function stepOnce() {
   if (xr.session) pumpUploads(1e9);
   S.lastMs = performance.now() - t0;
   S.waited += S.lastMs;
-  if (!ok) { S.note = '⚠ 下一顆載不起來'; S.running = false; return; }
+  if (!ok) {
+    // 一顆載不起來不要整個停跑(常是網路瞬斷或某來源慢)。這顆丟掉,
+    // 重抓佇列(會重新挑連結、必要時挑別條路),連續失敗多次才真的停。
+    S.loadFail = (S.loadFail || 0) + 1;
+    P.dead = true;
+    if (S.loadFail >= 8) { S.note = T('⚠ 連續載入失敗,先暫停(再按開始重試)', '⚠ Repeated load failures — paused'); S.running = false; S.loadFail = 0; return; }
+    S.note = T(`⚠ 這顆載不起來,換一條…(${S.loadFail})`, `⚠ Tile load failed, rerouting… (${S.loadFail})`);
+    draw();
+    S.wish = null;                              // 別卡在同一個轉向意圖
+    dropQueue(); await fillQueue();             // 重挑連結、重抓
+    await sleep(300 * S.loadFail);              // 退避一下(網路瞬斷時給它喘息)
+    return;                                     // 這一步作廢,下一輪 stepOnce 重來
+  }
+  S.loadFail = 0;
   fillQueue();                                 // 不等它，讓它在背景補滿
 
   // 手擺速只在「最近有讀到控制器」時生效 —— 放下控制器 2.5 秒後
