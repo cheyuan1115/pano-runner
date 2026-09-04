@@ -23,24 +23,44 @@ def get_by_id(pid):
         return p
     except Exception: return None
 
+def dest(lat, lng, brg_deg, d):
+    R = 6371000; br = math.radians(brg_deg); la = math.radians(lat); lo = math.radians(lng); dr = d / R
+    la2 = math.asin(math.sin(la)*math.cos(dr) + math.cos(la)*math.sin(dr)*math.cos(br))
+    lo2 = lo + math.atan2(math.sin(br)*math.sin(dr)*math.cos(la), math.cos(dr)-math.sin(la)*math.sin(la2))
+    return math.degrees(la2), math.degrees(lo2)
+
 def links_of(p):
-    # neighbors → 連結(每 30° 扇區挑最接近 10m 的,稀釋成 Google 尺度的步距)
-    near, far = {}, {}
+    # 百度的 neighbors 清單常不對稱(只列一個方向)→ 跑到會來回彈跳(實測)。
+    # 改成主動探測:8 方向各 ~11m 找最近全景(像 Apple),得到對稱的局部圖。
+    def probe(bd):
+        la, lo = dest(p.lat, p.lon, bd, 11)
+        try:
+            q = baidu.find_panorama(la, lo)
+            if q and str(q.id) != str(p.id):
+                panos[str(q.id)] = q
+                d, b = brg(p.lat, p.lon, q.lat, q.lon)
+                if 2 < d < 20: return (str(q.id), q.lat, q.lon, round(d, 1), round(b, 1))
+        except Exception: pass
+        return None
+    with ThreadPoolExecutor(8) as ex:
+        res = list(ex.map(probe, range(0, 360, 45)))
+    # 也併入 neighbors(近的),多一層保險
+    cand = {}
+    for r in res:
+        if r: cand[r[0]] = r
     for n in (p.neighbors or []):
         if not getattr(n, 'lat', None): continue
         d, b = brg(p.lat, p.lon, n.lat, n.lon)
-        if d < 1.5 or d > 30: continue
+        if 2 < d < 16 and str(n.id) not in cand:
+            cand[str(n.id)] = (str(n.id), n.lat, n.lon, round(d, 1), round(b, 1))
+    # 每 30° 扇區挑最接近 10m 的(稀釋步距)
+    sec = {}
+    for cid, la, lo, d, b in cand.values():
         k = round(b / 30) % 12
-        if k not in near or d < near[k][0]: near[k] = (d, n, b)
-        if 4 <= d <= 16:
-            sc = abs(d - 10)
-            if k not in far or sc < far[k][0]: far[k] = (sc, n, b, d)
-    out = []
-    for k in set(list(near.keys()) + list(far.keys())):
-        if k in far: _, n, b, d = far[k]
-        else: d, n, b = near[k]
-        out.append({'id': str(n.id), 'lat': n.lat, 'lng': n.lon, 'heading': round(b, 1), 'd': round(d, 1), 'dz': 0})
-    return out
+        sc = abs(d - 10)
+        if k not in sec or sc < sec[k][0]: sec[k] = (sc, cid, la, lo, d, b)
+    return [{'id': cid, 'lat': la, 'lng': lo, 'heading': b, 'd': d, 'dz': 0}
+            for _, cid, la, lo, d, b in sec.values()]
 
 def handle(req):
     op = req['op']
