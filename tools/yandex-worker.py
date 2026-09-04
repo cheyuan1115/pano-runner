@@ -9,6 +9,12 @@ from streetlevel import yandex
 CACHE = os.path.join(os.path.dirname(__file__), '..', '.yxcache')
 os.makedirs(CACHE, exist_ok=True)
 panos = {}
+BUILD_LOCKS = {}       # id -> Lock:同一顆切磚只做一次(否則 20 塊磚各觸發一次重複下載)
+LOCKS_GUARD = threading.Lock()
+def build_lock(pid):
+    with LOCKS_GUARD:
+        if pid not in BUILD_LOCKS: BUILD_LOCKS[pid] = threading.Lock()
+        return BUILD_LOCKS[pid]
 
 def brg(a_lat, a_lng, b_lat, b_lng):
     dx = (b_lng - a_lng) * math.cos(math.radians(a_lat)) * 111320
@@ -74,25 +80,27 @@ def handle(req):
         d = os.path.join(CACHE, pid.replace('/', '_'))
         done = os.path.join(d, 'done.json')
         if os.path.exists(done): return json.load(open(done))
-        p = get_by_id(pid)
-        if not p: return {'error': 'unknown-pano'}
-        t0 = time.time()
-        raw = d + '.raw.jpg'
-        os.makedirs(d, exist_ok=True)
-        yandex.download_panorama(p, raw, zoom=0)     # 最高清,等距柱狀
-        eq = Image.open(raw).convert('RGB'); os.remove(raw)
-        out = {'tile': 512, 'zooms': {}}
-        for z, w in ((2, 2048), (3, 4096)):
-            h = w // 2
-            im = eq.resize((w, h), Image.LANCZOS)
-            for cx in range(w // 512):
-                for cy in range(h // 512):
-                    im.crop((cx*512, cy*512, cx*512+512, cy*512+512)).save(
-                        os.path.join(d, f'{z}_{cx}_{cy}.jpg'), quality=84)
-            out['zooms'][str(z)] = {'w': w, 'h': h}
-        out['secs'] = round(time.time()-t0, 1)
-        json.dump(out, open(done, 'w'))
-        return out
+        with build_lock(pid):                        # 同顆只建一次;後到的等它、直接讀 done
+            if os.path.exists(done): return json.load(open(done))
+            p = get_by_id(pid)
+            if not p: return {'error': 'unknown-pano'}
+            t0 = time.time()
+            raw = d + '.raw.jpg'
+            os.makedirs(d, exist_ok=True)
+            yandex.download_panorama(p, raw, zoom=1)     # zoom=1 較小較快(俄國線路慢,別抓最大)
+            eq = Image.open(raw).convert('RGB'); os.remove(raw)
+            out = {'tile': 512, 'zooms': {}}
+            for z, w in ((2, 1536), (3, 3072)):
+                h = w // 2
+                im = eq.resize((w, h), Image.LANCZOS)
+                for cx in range(w // 512):
+                    for cy in range(h // 512):
+                        im.crop((cx*512, cy*512, cx*512+512, cy*512+512)).save(
+                            os.path.join(d, f'{z}_{cx}_{cy}.jpg'), quality=84)
+                out['zooms'][str(z)] = {'w': w, 'h': h}
+            out['secs'] = round(time.time()-t0, 1)
+            json.dump(out, open(done, 'w'))
+            return out
     return {'error': 'bad-op'}
 
 OUT_LOCK = threading.Lock(); POOL = ThreadPoolExecutor(4)

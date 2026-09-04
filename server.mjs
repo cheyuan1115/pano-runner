@@ -97,9 +97,9 @@ const bdMeta = new Map();
 
 // ── Yandex 全景資料層(俄羅斯+中亞+土耳其等)——比照百度,links 導航圖乾淨 ──
 const isYandex = id => /_/.test(String(id || ''));
-const YX_GEOM = { h: 2048, w: 4096, tile: 512, zooms: [
-  { w: 512, h: 256 }, { w: 1024, h: 512 }, { w: 2048, h: 1024 },
-  { w: 4096, h: 2048 }, { w: 4096, h: 2048 }, { w: 4096, h: 2048 }] };
+const YX_GEOM = { h: 1536, w: 3072, tile: 512, zooms: [
+  { w: 384, h: 192 }, { w: 768, h: 384 }, { w: 1536, h: 768 },
+  { w: 3072, h: 1536 }, { w: 3072, h: 1536 }, { w: 3072, h: 1536 }] };
 const YX_CACHE = join(ROOT_DIR, '.yxcache');
 let YW = null, ywRid = 0; const ywPend = new Map();
 async function ywEnsure() {
