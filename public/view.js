@@ -988,17 +988,21 @@ async function stepOnce() {
   S.lastMs = performance.now() - t0;
   S.waited += S.lastMs;
   if (!ok) {
-    // 一顆載不起來不要整個停跑(常是網路瞬斷或某來源慢)。這顆丟掉,
-    // 重抓佇列(會重新挑連結、必要時挑別條路),連續失敗多次才真的停。
+    // 一顆載不起來(通常是 meta 網路瞬斷)先重試「同一顆」,不要清佇列換路 ——
+    // 清佇列+換路會把狀態搞亂、連鎖失敗(實測 Google 到處卡)。同顆重試幾次
+    // 大多能恢復;真的不行才停(再按開始重試)。
     S.loadFail = (S.loadFail || 0) + 1;
-    P.dead = true;
-    if (S.loadFail >= 8) { S.note = T('⚠ 連續載入失敗,先暫停(再按開始重試)', '⚠ Repeated load failures — paused'); S.running = false; S.loadFail = 0; return; }
-    S.note = T(`⚠ 這顆載不起來,換一條…(${S.loadFail})`, `⚠ Tile load failed, rerouting… (${S.loadFail})`);
-    draw();
-    S.wish = null;                              // 別卡在同一個轉向意圖
-    dropQueue(); await fillQueue();             // 重挑連結、重抓
-    await sleep(300 * S.loadFail);              // 退避一下(網路瞬斷時給它喘息)
-    return;                                     // 這一步作廢,下一輪 stepOnce 重來
+    if (S.loadFail <= 3) {
+      S.note = T(`⚠ 這顆載不起來,重試…(${S.loadFail})`, `⚠ Load failed, retrying… (${S.loadFail})`);
+      draw();
+      await sleep(400 * S.loadFail);
+      const P2 = mkPano();
+      const ok2 = await load(P2, link.id, S.watchLm ? bearingTo({ lat: link.lat, lng: link.lng }, S.watchLm) : link.heading);
+      if (ok2) { queue.unshift({ link, P: P2, done: Promise.resolve(true) }); S.loadFail = 0; return; }
+      return;                                   // 還是失敗,下一輪再重試(loadFail 已 +1)
+    }
+    S.note = T('⚠ 載入失敗,先暫停(再按開始重試)', '⚠ Load failed — paused (press start to retry)');
+    S.running = false; S.loadFail = 0; return;
   }
   S.loadFail = 0;
   fillQueue();                                 // 不等它，讓它在背景補滿
