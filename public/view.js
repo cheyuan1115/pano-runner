@@ -355,7 +355,9 @@ const upscale = (bm, size) => {
 let netBytes = 0;
 const fetchTile = async (pano, x, y, z) => {
   // Apple 全景 id 是純數字 → 磚塊走自家 /atile(worker 重投影+切磚)
-  const u = S.src === 'baidu'
+  const u = S.src === 'yandex'
+    ? `/ytile?pano=${pano}&x=${x}&y=${y}&z=${z}`
+    : S.src === 'baidu'
     ? `/btile?pano=${pano}&x=${x}&y=${y}&z=${z}`
     : S.src === 'apple'
     ? `/atile?pano=${pano}&x=${x}&y=${y}&z=${z}`
@@ -470,7 +472,7 @@ async function load(P, panoId, heading) {
   // Apple:worker 已填正確的 meta.yaw = (540 - heading) % 360
   //(heading 是逆時針、轉順時針就是行車方向,+180 = 重投影中央 = 行車反方向)。
   // 每顆確定值、轉彎自動對。aflip 只是保險微調(預設 0)。
-  if ((S.src === 'apple' || S.src === 'baidu') && Number.isFinite(meta.yaw))
+  if ((S.src === 'apple' || S.src === 'baidu' || S.src === 'yandex') && Number.isFinite(meta.yaw))
     meta.yaw = ((meta.yaw + S.aflip) % 360 + 360) % 360;
   // 月份鎖：這顆不是目標月份拍的、而且時光機裡有 → 改載那個月份的版本。
   // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
@@ -2736,6 +2738,7 @@ function updateAttr() {
   const d = S.cur?.meta?.date;
   const srcN = S.src === 'apple' ? (EN_UI ? 'Apple Look Around' : 'Apple Look Around')
              : S.src === 'baidu' ? (EN_UI ? 'Baidu Maps' : '百度地圖街景')
+             : S.src === 'yandex' ? 'Yandex'
              : (EN_UI ? 'Google Street View' : 'Google 街景服務');
   el.textContent = (EN_UI ? 'Imagery © ' : '影像 © ') + srcN
     + (d ? (EN_UI ? ` (captured ${d[1]}/${d[0]})` : `（${d[0]} 年 ${d[1]} 月拍攝）`) : '')
@@ -3468,14 +3471,14 @@ addEventListener('keydown', e => {
   else if (e.key === 'M') { MM.z = MM.z >= 17 ? 14 : MM.z + 1; S.note = `🗺 縮放 z${MM.z}`; }
   // Apple 方位微調:重投影中央方位有量測誤差,跑步中 [ 左轉 ] 右轉 5°,自動記住。
   // 只改「顯示朝向」,不影響行進方向(道路照跑)。改了要重載目前這顆才套用新 yaw。
-  else if (e.key === '\\' && (S.src === 'apple' || S.src === 'baidu')) {   // 整體前後翻 180°(反著走時按一下)
+  else if (e.key === '\\' && (S.src === 'apple' || S.src === 'baidu' || S.src === 'yandex')) {   // 整體前後翻 180°(反著走時按一下)
     S.aflip = (S.aflip + 180) % 360;
     localStorage.setItem('pano-aflip4', S.aflip);
     S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
     S.note = `🔄 前後翻轉(${S.aflip ? '反' : '正'})`;
     S.noteHold = Date.now() + 4000; draw();
   }
-  else if ((e.key === '[' || e.key === ']') && (S.src === 'apple' || S.src === 'baidu')) {   // 微調 5°
+  else if ((e.key === '[' || e.key === ']') && (S.src === 'apple' || S.src === 'baidu' || S.src === 'yandex')) {   // 微調 5°
     const d = e.key === ']' ? 15 : -15;
     S.aflip = ((S.aflip + d) % 360 + 360) % 360;
     localStorage.setItem('pano-aflip4', S.aflip);
@@ -3558,6 +3561,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
   if (q.get('src') === 'baidu') { S.src = 'baidu'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:百度(中國)
+  if (q.get('src') === 'yandex') { S.src = 'yandex'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Yandex(俄羅斯等)
   S.ayaw = 0;                                  // 種子:首顆朝行進方向選邊
   S.aflip = localStorage.getItem('pano-aflip4') != null ? +localStorage.getItem('pano-aflip4') : 0;   // 整體前後(預設0=正前,實測);\\ 鍵切換記住
   if (q.get('mini') === '0') S.mini = false;

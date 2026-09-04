@@ -52,7 +52,7 @@ function loadVibe() {
 // 街景涵蓋:選百度/Apple 時,放大後在地圖撒網格探測、畫綠點(有街景的地方)。
 // 讀 localStorage 判斷來源(SRC 變數在檔案後面才宣告,這裡會踩 TDZ)。
 let cov = null, covTimer = null;
-function coverSrc() { const s = localStorage.getItem('pano-src2'); return (s === 'apple' || s === 'baidu') ? s : ''; }
+function coverSrc() { const s = localStorage.getItem('pano-src2'); return ['apple','baidu','yandex'].includes(s) ? s : ''; }
 function loadCoverage() {
   clearTimeout(covTimer);
   const src = coverSrc();
@@ -629,14 +629,15 @@ el('zout').onclick = () => zoomBy(-1);
 renderRuns();
 // 影像來源:Google 街景(預設)或 Apple Look Around(台灣畫質好、街景新,
 // 但沒有歷史影像 → 時光機/櫻花模式只有 Google 有)
-let SRC = ['apple', 'baidu'].includes(localStorage.getItem('pano-src2')) ? localStorage.getItem('pano-src2') : '';
+let SRC = ['apple', 'baidu', 'yandex'].includes(localStorage.getItem('pano-src2')) ? localStorage.getItem('pano-src2') : '';
 {
   const b = el('srcbtn');
-  const CYCLE = ['', 'apple', 'baidu'];   // Google → Apple → 百度 → …
-  const LABEL = { '': '🌐 Google 街景', 'apple': '🍎 Apple（新影像·較不順）', 'baidu': '🇨🇳 百度街景（中國）' };
+  const CYCLE = ['', 'apple', 'baidu', 'yandex'];   // Google → Apple → 百度 → Yandex → …
+  const LABEL = { '': '🌐 Google 街景', 'apple': '🍎 Apple（新影像·較不順）', 'baidu': '🇨🇳 百度街景（中國）', 'yandex': '🇷🇺 Yandex（俄羅斯等）' };
   const TIP = { '': 'Google 街景:順、方向準,跑步建議用這個',
                 'apple': 'Apple Look Around:台灣畫質新,但轉彎/流暢度不如 Google',
-                'baidu': '百度街景:中國大陸專用(Google/Apple 在中國沒有),有路名與歷史街景' };
+                'baidu': '百度街景:中國大陸專用(Google/Apple 在中國沒有),有路名與歷史街景',
+                'yandex': 'Yandex:俄羅斯、中亞、土耳其等;畫質好、導航圖乾淨' };
   if (b) {
     const paint = () => { b.textContent = LABEL[SRC]; b.style.borderColor = SRC ? '#e08030' : ''; b.title = TIP[SRC]; };
     paint();
