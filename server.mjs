@@ -451,6 +451,41 @@ const handler = async (req, res) => {
     // 店家密度是拿得到的最好代理(OSM 的 shop/amenity 標得很全)。
     // 走 Overpass API(免金鑰,禮貌 UA);bbox 吸附到 0.02° 格網再查,
     // 平移地圖時大多命中快取,不會每動一下就打一次 Overpass。
+    // 街景涵蓋探測(Apple/百度沒有現成藍線圖層,或投影對不上)。
+    // 在可視範圍撒網格、對每點 find,回傳有街景的落點。格網快取,平移大多命中。
+    if (u.pathname === '/api/coverage') {
+      const src = u.searchParams.get('src');
+      if (src !== 'apple' && src !== 'baidu') return json(res, { pts: [] });
+      const b = (u.searchParams.get('bbox') || '').split(',').map(Number);
+      if (b.length !== 4 || b.some(x => !isFinite(x))) return json(res, { error: 'bbox' }, 400);
+      let [s0, w0, n0, e0] = b;
+      // 太大就夾中心(避免撒太多點);網格 7×7
+      const cy = (s0 + n0) / 2, cx = (w0 + e0) / 2;
+      if (n0 - s0 > 0.03) { s0 = cy - 0.015; n0 = cy + 0.015; }
+      if (e0 - w0 > 0.04) { w0 = cx - 0.02; e0 = cx + 0.02; }
+      const N = 7, rad = 90;
+      const key = src + ':' + [s0, w0, n0, e0].map(x => x.toFixed(3)).join(',');
+      if (!globalThis.covMem) globalThis.covMem = new Map();
+      if (globalThis.covMem.has(key)) return json(res, { pts: await globalThis.covMem.get(key) });
+      const rpc = src === 'apple' ? apple : baidu;
+      const jobs = [];
+      for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+        const lat = s0 + (n0 - s0) * (i + 0.5) / N;
+        const lng = w0 + (e0 - w0) * (j + 0.5) / N;
+        jobs.push(rpc('find', { lat, lng, r: rad }, 20000)
+          .then(r => (r && !r.error && r.lat) ? { lat: r.lat, lng: r.lng } : null).catch(() => null));
+      }
+      const pr = Promise.all(jobs).then(rs => {
+        // 去重(落點會重複)
+        const seen = new Set(), out = [];
+        for (const r of rs) { if (!r) continue; const k = r.lat.toFixed(5) + ',' + r.lng.toFixed(5);
+          if (!seen.has(k)) { seen.add(k); out.push(r); } }
+        return out;
+      });
+      globalThis.covMem.set(key, pr);
+      if (globalThis.covMem.size > 80) globalThis.covMem.delete(globalThis.covMem.keys().next().value);
+      return json(res, { pts: await pr });
+    }
     if (u.pathname === '/api/vibe') {
       const b = (u.searchParams.get('bbox') || '').split(',').map(Number);
       if (b.length !== 4 || b.some(x => !isFinite(x))) return json(res, { error: 'bbox 要 s,w,n,e' }, 400);

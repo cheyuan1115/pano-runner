@@ -49,6 +49,25 @@ function loadVibe() {
   }, 350);
 }
 
+// 街景涵蓋:選百度/Apple 時,放大後在地圖撒網格探測、畫綠點(有街景的地方)。
+// 讀 localStorage 判斷來源(SRC 變數在檔案後面才宣告,這裡會踩 TDZ)。
+let cov = null, covTimer = null;
+function coverSrc() { const s = localStorage.getItem('pano-src2'); return (s === 'apple' || s === 'baidu') ? s : ''; }
+function loadCoverage() {
+  clearTimeout(covTimer);
+  const src = coverSrc();
+  if (!src || V.z < 14) { if (cov) { cov = null; drawInk(); } return; }   // 縮太遠不撒網
+  covTimer = setTimeout(async () => {
+    const { w, h } = size();
+    const nw = toLL(0, 0), se = toLL(w, h);
+    try {
+      const r = await fetch(`/api/coverage?src=${src}&bbox=${se.lat},${nw.lng},${nw.lat},${se.lng}`);
+      const j = await r.json();
+      cov = (j.pts || []); drawInk();
+    } catch {}
+  }, 400);
+}
+
 let shown = null;                                    // 現在畫在地圖上的那一趟
 
 // ── Web Mercator ──
@@ -113,6 +132,7 @@ function drawMap() {
   const zl = el('zlvl'); if (zl) zl.textContent = 'z' + V.z;
   loadLandmarks();
   loadVibe();
+  loadCoverage();
   drawInk();
 }
 
@@ -121,6 +141,14 @@ function drawInk() {
   ink.width = w * dpr; ink.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  if (cov && cov.length && V.z >= 14) {
+    ctx.fillStyle = 'rgba(70,190,90,.85)';
+    for (const p of cov) {
+      const q = toScreen(p);
+      if (q.x < -10 || q.y < -10 || q.x > w + 10 || q.y > h + 10) continue;
+      ctx.beginPath(); ctx.arc(q.x, q.y, 3.5, 0, 7); ctx.fill();
+    }
+  }
   if (vibeOn && vibe && V.z >= 13) {
     // 徒步區/商業區塊:整塊淡橘,一眼看出「商店街在這」
     ctx.fillStyle = 'rgba(255,150,60,.10)';
