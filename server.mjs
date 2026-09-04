@@ -127,6 +127,38 @@ async function yandexRpc(op, params, timeoutMs = 60000) {
 }
 const yxMeta = new Map();
 
+// ── Kakao 街景資料層(韓國)——比照 Yandex,快、標準羅盤、對稱鄰居 ──
+const isKakao = id => /^\d{6,11}$/.test(String(id || ''));   // 短純數字(Apple 是 12+)
+const KK_GEOM = { h: 2048, w: 4096, tile: 512, zooms: [
+  { w: 512, h: 256 }, { w: 1024, h: 512 }, { w: 2048, h: 1024 },
+  { w: 4096, h: 2048 }, { w: 4096, h: 2048 }, { w: 4096, h: 2048 }] };
+const KK_CACHE = join(ROOT_DIR, '.kkcache');
+let KW = null, kwRid = 0; const kwPend = new Map();
+async function kwEnsure() {
+  if (KW && !KW.killed && KW.exitCode == null) return;
+  const { spawn } = await import('node:child_process');
+  KW = spawn(join(ROOT_DIR, '.laenv', 'bin', 'python'),
+    [join(ROOT_DIR, 'tools', 'kakao-worker.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let buf = '';
+  KW.stdout.on('data', d => { buf += d; let i2;
+    while ((i2 = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i2); buf = buf.slice(i2 + 1);
+      try { const m = JSON.parse(line); if (kwPend.has(m.rid)) { kwPend.get(m.rid)(m); kwPend.delete(m.rid); } } catch {} }
+  });
+  KW.stderr.on('data', d => { const t = String(d); if (/Error|error/.test(t)) console.log('kakao-worker:', t.slice(0, 200)); });
+  KW.on('exit', c => { console.log('kakao-worker 退出', c); for (const f of kwPend.values()) f({ error: 'worker-died' }); kwPend.clear(); });
+  console.log('kakao-worker 啟動');
+}
+async function kakaoRpc(op, params, timeoutMs = 60000) {
+  await kwEnsure();
+  const rid = ++kwRid;
+  return new Promise(res2 => {
+    const t = setTimeout(() => { kwPend.delete(rid); res2({ error: 'worker-timeout' }); }, timeoutMs);
+    kwPend.set(rid, m => { clearTimeout(t); res2(m); });
+    KW.stdin.write(JSON.stringify({ op, ...params, rid }) + '\n');
+  });
+}
+const kkMeta = new Map();
+
 // 鄰居雲 → 連結。Apple 點距只有 5-7m,一顆一顆走每步都要重投影(2.2s)追不上,
 // 跑起來一步一停。所以稀釋成「約 13m 一步」(等於 Google 的點距):每 30° 扇區
 // 挑最接近 13m 的那顆,備圖數量砍半。扇區在 [4,18] 內沒點(稀疏處)才退回最近點。
@@ -478,6 +510,13 @@ const handler = async (req, res) => {
           yandexRpc('pyramid', { id: j.id }, 120000).catch(() => {});
           return json(res, { pano: j.id, lat: j.lat, lng: j.lng, d: j.d });
         }
+        if (u.searchParams.get('src') === 'kakao') {
+          const j = await kakaoRpc('find', { lat, lng, r: rad }, 60000);
+          if (j.error) return json(res, { error: j.error === 'no-coverage' ? '這裡沒有 Kakao 街景' : '附近找不到 Kakao 街景' }, 404);
+          kkMeta.set(j.id, { lat: j.lat, lng: j.lng });
+          kakaoRpc('pyramid', { id: j.id }, 90000).catch(() => {});
+          return json(res, { pano: j.id, lat: j.lat, lng: j.lng, d: j.d });
+        }
         const r = await findPano(lat, lng, rad);
         if (!r) continue;
         // 順便回傳落點座標，呼叫端才知道吸到哪、差多遠
@@ -494,7 +533,7 @@ const handler = async (req, res) => {
     // 在可視範圍撒網格、對每點 find,回傳有街景的落點。格網快取,平移大多命中。
     if (u.pathname === '/api/coverage') {
       const src = u.searchParams.get('src');
-      if (!['apple', 'baidu', 'yandex'].includes(src)) return json(res, { pts: [] });
+      if (!['apple', 'baidu', 'yandex', 'kakao'].includes(src)) return json(res, { pts: [] });
       const b = (u.searchParams.get('bbox') || '').split(',').map(Number);
       if (b.length !== 4 || b.some(x => !isFinite(x))) return json(res, { error: 'bbox' }, 400);
       let [s0, w0, n0, e0] = b;
@@ -506,7 +545,7 @@ const handler = async (req, res) => {
       const key = src + ':' + [s0, w0, n0, e0].map(x => x.toFixed(3)).join(',');
       if (!globalThis.covMem) globalThis.covMem = new Map();
       if (globalThis.covMem.has(key)) return json(res, { pts: await globalThis.covMem.get(key) });
-      const rpc = src === 'apple' ? apple : src === 'baidu' ? baidu : yandexRpc;
+      const rpc = src === 'apple' ? apple : src === 'baidu' ? baidu : src === 'yandex' ? yandexRpc : kakaoRpc;
       const jobs = [];
       for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
         const lat = s0 + (n0 - s0) * (i + 0.5) / N;
@@ -1471,6 +1510,18 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
     }
     if (u.pathname === '/api/meta') {
       const id = u.searchParams.get('pano');
+      if (isKakao(id)) {
+        const j = await kakaoRpc('meta', { id });
+        if (j.error) return json(res, { error: j.error }, 404);
+        for (const n of j.links || []) kkMeta.set(n.id, { lat: n.lat, lng: n.lng });
+        kkMeta.set(id, { lat: j.lat, lng: j.lng });
+        if (kkMeta.size > 5000) for (const k of [...kkMeta.keys()].slice(0, 1000)) kkMeta.delete(k);
+        kakaoRpc('pyramid', { id }, 90000).catch(() => {});
+        return json(res, { pano: id, lat: j.lat, lng: j.lng, el: 0, yaw: j.yaw,
+          date: j.date ? [+j.date.slice(0, 4), +j.date.slice(5, 7)] : null,
+          eras: [], indoor: false, car: true, floor: null, below: false,
+          geom: KK_GEOM, links: j.links });
+      }
       if (isYandex(id)) {
         const j = await yandexRpc('meta', { id });
         if (j.error) return json(res, { error: j.error }, 404);
@@ -1513,6 +1564,17 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
       return json(res, m || { error: '查不到這顆全景' }, m ? 200 : 404);
     }
     // Apple 磚塊:worker 切好放 .lacache,沒切完就等它(引擎抓磚有 8 秒逾時+重試)
+    if (u.pathname === '/ktile') {
+      const id = u.searchParams.get('pano');
+      const z = Math.max(2, Math.min(3, +u.searchParams.get('z') || 2));
+      const x = +u.searchParams.get('x') || 0, y = +u.searchParams.get('y') || 0;
+      const f = join(KK_CACHE, id, `${z}_${x}_${y}.jpg`);
+      const send = b => { res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=604800' }); res.end(b); };
+      try { return send(await readFile(f)); } catch {}
+      const j = await kakaoRpc('pyramid', { id }, 90000);
+      if (j.error) return json(res, { error: j.error }, 404);
+      try { return send(await readFile(f)); } catch { return json(res, { error: '切磚失敗' }, 404); }
+    }
     if (u.pathname === '/ytile') {
       const id = u.searchParams.get('pano');
       const z = Math.max(2, Math.min(3, +u.searchParams.get('z') || 2));
