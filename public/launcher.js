@@ -104,6 +104,7 @@ const toLL = (sx, sy) => {
 
 // ── 磚塊 ──
 const cache = new Map();
+const svCache = new Map();   // Google 街景涵蓋層圖磚
 function drawMap() {
   const { w, h } = size();
   const left = lng2x(V.lng, V.z) - w / 2, top = lat2y(V.lat, V.z) - h / 2;
@@ -127,8 +128,15 @@ function drawMap() {
     img.style.left = (x * TS - left) + 'px';
     img.style.top = (y * TS - top) + 'px';
     img.style.display = '';
+    // Google 街景涵蓋層(藍線,對齊),疊在底圖上
+    if (!coverSrc() && V.z >= 10) {
+      let sv = svCache.get(key);
+      if (!sv) { sv = new Image(); sv.className = 'svtile'; sv.src = `/svtile?z=${V.z}&x=${tx}&y=${y}`; svCache.set(key, sv); map.appendChild(sv); }
+      sv.style.left = (x * TS - left) + 'px'; sv.style.top = (y * TS - top) + 'px'; sv.style.display = '';
+    }
   }
   for (const [k, img] of cache) if (!keep.has(k)) img.style.display = 'none';
+  for (const [k, sv] of svCache) if (!keep.has(k) || coverSrc() || V.z < 10) sv.style.display = 'none';
   const zl = el('zlvl'); if (zl) zl.textContent = 'z' + V.z;
   loadLandmarks();
   loadVibe();

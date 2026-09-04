@@ -541,7 +541,7 @@ const handler = async (req, res) => {
       const cy = (s0 + n0) / 2, cx = (w0 + e0) / 2;
       if (n0 - s0 > 0.03) { s0 = cy - 0.015; n0 = cy + 0.015; }
       if (e0 - w0 > 0.04) { w0 = cx - 0.02; e0 = cx + 0.02; }
-      const N = 7, rad = 90;
+      const N = 9, rad = 90;
       const key = src + ':' + [s0, w0, n0, e0].map(x => x.toFixed(3)).join(',');
       if (!globalThis.covMem) globalThis.covMem = new Map();
       if (globalThis.covMem.has(key)) return json(res, { pts: await globalThis.covMem.get(key) });
@@ -886,6 +886,22 @@ out geom qt 500;`;
     }
     // 小地圖的磚塊。轉一手是為了存本機 —— 跑同一條路線不用一直跟 CDN 要，
     // 而且跟街景磚塊搶頻寬會讓畫面卡住。
+    // Google 街景涵蓋圖磚(藍線,Web Mercator,跟地圖對齊)。啟動器疊在底圖上。
+    if (u.pathname === '/svtile') {
+      const z = +u.searchParams.get('z'), x = +u.searchParams.get('x'), y = +u.searchParams.get('y');
+      if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y)) return json(res, { error: '參數' }, 400);
+      const dir = join(ROOT_DIR, '.svtiles');
+      const f = join(dir, `${z}_${x}_${y}.png`);
+      const send = b => { res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=1209600' }); res.end(b); };
+      try { return send(await readFile(f)); } catch {}
+      const gu = `https://maps.googleapis.com/maps/vt?pb=!1m5!1m4!1i${z}!2i${x}!3i${y}!4i256!2m8!1e2!2ssvv!4m2!1scc!2s*211m3*211e2*212b1*213e2*212b1*214b1!4m2!1ssvl!2s*211b0*212b1!3m8!2sen!3sus!5e1105!12m4!1e68!2m2!1sset!2sRoadmap!4e0`;
+      try {
+        const r = await fetch(gu, { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.google.com/maps' } });
+        const b = Buffer.from(await r.arrayBuffer());
+        await mkdir(dir, { recursive: true }); await writeFile(f, b);
+        return send(b);
+      } catch { return json(res, { error: 'svtile' }, 502); }
+    }
     if (u.pathname === '/maptile') {
       const z = +u.searchParams.get('z'), x = +u.searchParams.get('x'), y = +u.searchParams.get('y');
       if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y)

@@ -9,6 +9,7 @@
   #map.pan { cursor: grabbing; }
   .tile { position: absolute; width: 256px; height: 256px;
           filter: saturate(.45) brightness(1.04); }   /* OSM 官方磚太花,淡化 */
+  .svtile { position: absolute; width: 256px; height: 256px; pointer-events: none; opacity: .9; }   /* Google 街景涵蓋藍線 */
   /* canvas 是替換元素：只寫 inset:0 不會把它撐開，CSS 尺寸會沿用內在尺寸
      （也就是 ink.width = 視窗寬 × dpr），等於整張畫布放大兩倍、標記位置全偏掉。
      一定要明寫 width/height。#gl 有寫 100vw 所以跑步頁沒事，只有這張漏了。 */
