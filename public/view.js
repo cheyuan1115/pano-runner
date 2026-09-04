@@ -905,7 +905,9 @@ async function fillLoop() {
     const last = queue[queue.length - 1];
     let meta, dir;
     if (last) {
-      await (last.P.metaDone || last.done);   // 只等 meta(知道連到哪);磚塊背景並行載
+      // Google 磚快、序列預抓本來就順(原始行為);只有慢來源(自架 worker 下載切磚)
+      // 才需要「只等 meta、磚塊背景並行載」的加速。Google 走原本的等全載完,穩。
+      await (S.src ? (last.P.metaDone || last.done) : last.done);
       if (ep !== qEpoch) return;
       if (!last.P.meta) return;
       // 櫻花模式的年代黏著：連結圖在路口會跨年代相連，選路只看方位不知道
