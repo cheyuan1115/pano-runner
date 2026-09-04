@@ -63,6 +63,38 @@ async function apple(op, params, timeoutMs = 60000) {
     AW.stdin.write(JSON.stringify({ op, ...params, rid }) + '\n');
   });
 }
+// ── 百度全景資料層(中國;Google/Apple 零覆蓋)——比照 Apple,但圖已是等距柱狀 ──
+const isBaidu = id => /[A-Za-z]/.test(String(id || '')) && /^\d{6,}/.test(String(id || ''));  // 數字開頭且含字母
+const BD_GEOM = { h: 2048, w: 4096, tile: 512, zooms: [
+  { w: 512, h: 256 }, { w: 1024, h: 512 }, { w: 2048, h: 1024 },
+  { w: 4096, h: 2048 }, { w: 4096, h: 2048 }, { w: 4096, h: 2048 }] };
+const BD_CACHE = join(ROOT_DIR, '.bdcache');
+let BW = null, bwRid = 0; const bwPend = new Map();
+async function bwEnsure() {
+  if (BW && !BW.killed && BW.exitCode == null) return;
+  const { spawn } = await import('node:child_process');
+  BW = spawn(join(ROOT_DIR, '.laenv', 'bin', 'python'),
+    [join(ROOT_DIR, 'tools', 'baidu-worker.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let buf = '';
+  BW.stdout.on('data', d => { buf += d; let i2;
+    while ((i2 = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i2); buf = buf.slice(i2 + 1);
+      try { const m = JSON.parse(line); if (bwPend.has(m.rid)) { bwPend.get(m.rid)(m); bwPend.delete(m.rid); } } catch {} }
+  });
+  BW.stderr.on('data', d => { const t = String(d); if (/Error|error/.test(t)) console.log('baidu-worker:', t.slice(0, 200)); });
+  BW.on('exit', c => { console.log('baidu-worker 退出', c); for (const f of bwPend.values()) f({ error: 'worker-died' }); bwPend.clear(); });
+  console.log('baidu-worker 啟動');
+}
+async function baidu(op, params, timeoutMs = 60000) {
+  await bwEnsure();
+  const rid = ++bwRid;
+  return new Promise(res2 => {
+    const t = setTimeout(() => { bwPend.delete(rid); res2({ error: 'worker-timeout' }); }, timeoutMs);
+    bwPend.set(rid, m => { clearTimeout(t); res2(m); });
+    BW.stdin.write(JSON.stringify({ op, ...params, rid }) + '\n');
+  });
+}
+const bdMeta = new Map();
+
 // 鄰居雲 → 連結。Apple 點距只有 5-7m,一顆一顆走每步都要重投影(2.2s)追不上,
 // 跑起來一步一停。所以稀釋成「約 13m 一步」(等於 Google 的點距):每 30° 扇區
 // 挑最接近 13m 的那顆,備圖數量砍半。扇區在 [4,18] 內沒點(稀疏處)才退回最近點。
@@ -398,6 +430,13 @@ const handler = async (req, res) => {
           // 起點先開切:回應前不等(不拖慢開跑),但下一顆 meta 來時起點圖多半好了,
           // 冷啟動的頭幾步頓挫因此縮短
           apple('pyramid', { id: j.id, lat: j.lat, lng: j.lng }, 120000).catch(() => {});
+          return json(res, { pano: j.id, lat: j.lat, lng: j.lng, d: j.d });
+        }
+        if (u.searchParams.get('src') === 'baidu') {
+          const j = await baidu('find', { lat, lng, r: rad }, 90000);
+          if (j.error) return json(res, { error: j.error === 'no-coverage' ? '這裡沒有百度街景' : '附近找不到百度街景' }, 404);
+          bdMeta.set(j.id, { lat: j.lat, lng: j.lng });
+          baidu('pyramid', { id: j.id }, 120000).catch(() => {});
           return json(res, { pano: j.id, lat: j.lat, lng: j.lng, d: j.d });
         }
         const r = await findPano(lat, lng, rad);
@@ -1358,6 +1397,19 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
     }
     if (u.pathname === '/api/meta') {
       const id = u.searchParams.get('pano');
+      if (isBaidu(id)) {
+        const known = bdMeta.get(id) || {};
+        const j = await baidu('meta', { id });
+        if (j.error) return json(res, { error: j.error }, 404);
+        for (const n of j.links || []) bdMeta.set(n.id, { lat: n.lat, lng: n.lng });
+        bdMeta.set(id, { lat: j.lat, lng: j.lng });
+        if (bdMeta.size > 5000) for (const k of [...bdMeta.keys()].slice(0, 1000)) bdMeta.delete(k);
+        baidu('pyramid', { id }, 120000).catch(() => {});
+        return json(res, { pano: id, lat: j.lat, lng: j.lng, el: 0, yaw: j.yaw,
+          date: j.date ? [+j.date.slice(0, 4), +j.date.slice(5, 7)] : null,
+          eras: [], indoor: false, car: true, floor: null, below: false,
+          geom: BD_GEOM, links: j.links });
+      }
       if (isApple(id)) {
         const known = laMeta.get(id) || {};
         const j = await apple('meta', { id, lat: known.lat, lng: known.lng });
@@ -1375,6 +1427,17 @@ Spots:\n${list}\nReply STRICT JSON only: {"route":["name1","name2",...],"blurb":
       return json(res, m || { error: '查不到這顆全景' }, m ? 200 : 404);
     }
     // Apple 磚塊:worker 切好放 .lacache,沒切完就等它(引擎抓磚有 8 秒逾時+重試)
+    if (u.pathname === '/btile') {
+      const id = u.searchParams.get('pano');
+      const z = Math.max(2, Math.min(3, +u.searchParams.get('z') || 2));
+      const x = +u.searchParams.get('x') || 0, y = +u.searchParams.get('y') || 0;
+      const f = join(BD_CACHE, id, `${z}_${x}_${y}.jpg`);
+      const send = b => { res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=604800' }); res.end(b); };
+      try { return send(await readFile(f)); } catch {}
+      const j = await baidu('pyramid', { id }, 90000);
+      if (j.error) return json(res, { error: j.error }, 404);
+      try { return send(await readFile(f)); } catch { return json(res, { error: '切磚失敗' }, 404); }
+    }
     if (u.pathname === '/atile') {
       const id = u.searchParams.get('pano');
       const z = Math.max(2, Math.min(3, +u.searchParams.get('z') || 2));   // Apple 只切到 z3

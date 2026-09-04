@@ -355,7 +355,9 @@ const upscale = (bm, size) => {
 let netBytes = 0;
 const fetchTile = async (pano, x, y, z) => {
   // Apple 全景 id 是純數字 → 磚塊走自家 /atile(worker 重投影+切磚)
-  const u = /^\d{12,}$/.test(String(pano))
+  const u = S.src === 'baidu'
+    ? `/btile?pano=${pano}&x=${x}&y=${y}&z=${z}`
+    : S.src === 'apple'
     ? `/atile?pano=${pano}&x=${x}&y=${y}&z=${z}`
     : 'https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile'
     + `&panoid=${pano}&x=${x}&y=${y}&zoom=${z}&nbt=1&fover=2`;
@@ -468,7 +470,7 @@ async function load(P, panoId, heading) {
   // Apple:worker 已填正確的 meta.yaw = (540 - heading) % 360
   //(heading 是逆時針、轉順時針就是行車方向,+180 = 重投影中央 = 行車反方向)。
   // 每顆確定值、轉彎自動對。aflip 只是保險微調(預設 0)。
-  if (S.src === 'apple' && Number.isFinite(meta.yaw))
+  if ((S.src === 'apple' || S.src === 'baidu') && Number.isFinite(meta.yaw))
     meta.yaw = ((meta.yaw + S.aflip) % 360 + 360) % 360;
   // 月份鎖：這顆不是目標月份拍的、而且時光機裡有 → 改載那個月份的版本。
   // 換過去之後 meta.links 就是那趟的連結圖，路會自己在那個年代裡延續。
@@ -2907,7 +2909,7 @@ async function detourTo(lm) {
   let t = { lat: lm.lat, lng: lm.lng, lm };
   S.note = `⌖ 找 ${lm.name} 的路…`; draw();
   try {
-    const r = await (await fetch(`/api/find?${S.src === 'apple' ? 'src=apple&' : ''}ll=${lm.lat},${lm.lng}&r=60`,
+    const r = await (await fetch(`/api/find?${S.src ? 'src=' + S.src + '&' : ''}ll=${lm.lat},${lm.lng}&r=60`,
       { signal: AbortSignal.timeout(8000) })).json();
     if (r.lat) t = { lat: r.lat, lng: r.lng, lm };
   } catch {}
@@ -3181,7 +3183,7 @@ async function lateralHop(side) {
     const want = ((S.travelDir + sign * 90) % 360 + 360) % 360;
     for (const dist of [12, 22, 34]) {
       const p = destPoint(m.lat, m.lng, want, dist);
-      const f = await (await fetch(`/api/find?${S.src === 'apple' ? 'src=apple&' : ''}ll=${p.lat},${p.lng}&r=18`)).json();
+      const f = await (await fetch(`/api/find?${S.src ? 'src=' + S.src + '&' : ''}ll=${p.lat},${p.lng}&r=18`)).json();
       if (f.error || !f.pano || f.pano === m.pano) continue;
       const nm = await (await fetch('/api/meta?pano=' + f.pano)).json();
       if (nm.error || !nm.links.length) continue;
@@ -3466,14 +3468,14 @@ addEventListener('keydown', e => {
   else if (e.key === 'M') { MM.z = MM.z >= 17 ? 14 : MM.z + 1; S.note = `🗺 縮放 z${MM.z}`; }
   // Apple 方位微調:重投影中央方位有量測誤差,跑步中 [ 左轉 ] 右轉 5°,自動記住。
   // 只改「顯示朝向」,不影響行進方向(道路照跑)。改了要重載目前這顆才套用新 yaw。
-  else if (e.key === '\\' && S.src === 'apple') {   // 整體前後翻 180°(反著走時按一下)
+  else if (e.key === '\\' && (S.src === 'apple' || S.src === 'baidu')) {   // 整體前後翻 180°(反著走時按一下)
     S.aflip = (S.aflip + 180) % 360;
     localStorage.setItem('pano-aflip2', S.aflip);
     S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
     S.note = `🔄 前後翻轉(${S.aflip ? '反' : '正'})`;
     S.noteHold = Date.now() + 4000; draw();
   }
-  else if ((e.key === '[' || e.key === ']') && S.src === 'apple') {   // 微調 5°
+  else if ((e.key === '[' || e.key === ']') && (S.src === 'apple' || S.src === 'baidu')) {   // 微調 5°
     const d = e.key === ']' ? 5 : -5;
     S.aflip = ((S.aflip + d) % 360 + 360) % 360;
     localStorage.setItem('pano-aflip2', S.aflip);
@@ -3555,6 +3557,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('narrate') === '0') S.narrate = false;
   if (q.get('ask') === '0') S.askMode = false;
   if (q.get('src') === 'apple') { S.src = 'apple'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Apple(只切到 z3)
+  if (q.get('src') === 'baidu') { S.src = 'baidu'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:百度(中國)
   S.ayaw = 0;                                  // 種子:首顆朝行進方向選邊
   S.aflip = localStorage.getItem('pano-aflip2') != null ? +localStorage.getItem('pano-aflip2') : 0;   // 整體前後(預設0=正前,實測);\\ 鍵切換記住
   if (q.get('mini') === '0') S.mini = false;
@@ -3620,7 +3623,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   }
   if (!pano) {
     const ll = q.get('ll') || '35.52326,138.74587';       // 預設：大石公園
-    const f = await (await fetch(`/api/find?${S.src === 'apple' ? 'src=apple&' : ''}ll=` + encodeURIComponent(ll))).json();
+    const f = await (await fetch(`/api/find?${S.src ? 'src=' + S.src + '&' : ''}ll=` + encodeURIComponent(ll))).json();
     if (f.error) { hud.textContent = f.error; return; }
     pano = f.pano;
   }

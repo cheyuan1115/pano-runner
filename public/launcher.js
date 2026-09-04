@@ -315,7 +315,7 @@ async function snap(i) {
   el('start').disabled = true;
   el('step').textContent = p.lm ? `找「${p.lm.name}」最近的街景…` : '看看那裡有沒有街景…';
   try {
-    const r = await fetch(`/api/find?${SRC ? 'src=apple&' : ''}ll=${p.lat},${p.lng}&r=60`).then(x => x.json());
+    const r = await fetch(`/api/find?${SRC ? 'src=' + SRC + '&' : ''}ll=${p.lat},${p.lng}&r=60`).then(x => x.json());
     if (r.error || !r.lat) {
       el('step').textContent = '⚠ 這附近沒有街景，換個點。';
       pts.splice(i, 1); drawInk(); return;
@@ -590,7 +590,7 @@ el('start').onclick = () => {
     ...(el('sakura') && el('sakura').checked ? { season: 'sakura' }
        : el('lockmonth') && el('lockmonth').value ? { months: el('lockmonth').value } : {}),
     run: '1',
-    ...(SRC ? { src: 'apple' } : {}),
+    ...(SRC ? { src: SRC } : {}),
   });
   location.href = '/run.html?' + p + langQ();
 };
@@ -601,18 +601,19 @@ el('zout').onclick = () => zoomBy(-1);
 renderRuns();
 // 影像來源:Google 街景(預設)或 Apple Look Around(台灣畫質好、街景新,
 // 但沒有歷史影像 → 時光機/櫻花模式只有 Google 有)
-let SRC = localStorage.getItem('pano-src2') === 'apple' ? 'apple' : '';   // 預設 Google(順、有深度圖);Apple 為輔
+let SRC = ['apple', 'baidu'].includes(localStorage.getItem('pano-src2')) ? localStorage.getItem('pano-src2') : '';
 {
   const b = el('srcbtn');
+  const CYCLE = ['', 'apple', 'baidu'];   // Google → Apple → 百度 → …
+  const LABEL = { '': '🌐 Google 街景', 'apple': '🍎 Apple（新影像·較不順）', 'baidu': '🇨🇳 百度街景（中國）' };
+  const TIP = { '': 'Google 街景:順、方向準,跑步建議用這個',
+                'apple': 'Apple Look Around:台灣畫質新,但轉彎/流暢度不如 Google',
+                'baidu': '百度街景:中國大陸專用(Google/Apple 在中國沒有),有路名與歷史街景' };
   if (b) {
-    const paint = () => {
-      b.textContent = SRC ? '🍎 Apple（新影像·較不順）' : '🌐 Google 街景';
-      b.style.borderColor = SRC ? '#e08030' : '';
-      b.title = SRC ? 'Apple Look Around：台灣畫質新，但轉彎/流暢度不如 Google' : 'Google 街景：順、方向準、跑步建議用這個';
-    };
+    const paint = () => { b.textContent = LABEL[SRC]; b.style.borderColor = SRC ? '#e08030' : ''; b.title = TIP[SRC]; };
     paint();
     b.onclick = () => {
-      SRC = SRC ? '' : 'apple';
+      SRC = CYCLE[(CYCLE.indexOf(SRC) + 1) % CYCLE.length];
       localStorage.setItem('pano-src2', SRC || 'google');
       paint();
     };
