@@ -816,6 +816,12 @@ function pickLink(meta, dir, wish) {
   // 那代表我們已經在地下街裡，交給下面的脫困處理。
   const out = cand.filter(l => !indoorIds.has(l.id));
   if (out.length) cand = out;
+  // 避開最近走過的幾顆 —— 密集區(行人全景、廣場)會在幾顆之間繞小圈,
+  // 那些點角度都算「往前」躲不掉,只能靠記憶避開(實測 Yandex 商場一帶繞圈)。
+  if (S.recentPanos && S.recentPanos.length) {
+    const fresh = cand.filter(l => !S.recentPanos.includes(l.id));
+    if (fresh.length) cand = fresh;
+  }
   // 櫻花模式：被驗出「會離開春天年代」的連結也濾掉（見 fillLoop 的回退）
   if (eraAvoid.size) {
     const inEra = cand.filter(l => !eraAvoid.has(l.id));
@@ -1089,6 +1095,7 @@ async function stepOnce() {
     if (RW.trail.length > 60) RW.trail.shift();
   }
   S.cur = P; S.nxt = null; S.mix = 0; S.tMove = 0;
+  if (P.meta) { (S.recentPanos = S.recentPanos || []).push(P.meta.pano); if (S.recentPanos.length > 6) S.recentPanos.shift(); }
   updateAttr();
   // 這一步進行中如果下過轉向指令，就不要用舊連結的角度覆寫方向
   if (seq === S.turnSeq) {
