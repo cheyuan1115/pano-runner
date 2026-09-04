@@ -33,7 +33,7 @@ def links_of(p):
     # 百度的 neighbors 清單常不對稱(只列一個方向)→ 跑到會來回彈跳(實測)。
     # 改成主動探測:8 方向各 ~11m 找最近全景(像 Apple),得到對稱的局部圖。
     def probe(bd):
-        la, lo = dest(p.lat, p.lon, bd, 11)
+        la, lo = dest(p.lat, p.lon, bd[0], bd[1])
         try:
             q = baidu.find_panorama(la, lo)
             if q and str(q.id) != str(p.id):
@@ -43,7 +43,7 @@ def links_of(p):
         except Exception: pass
         return None
     with ThreadPoolExecutor(8) as ex:
-        res = list(ex.map(probe, range(0, 360, 45)))
+        res = list(ex.map(probe, [(a, r) for r in (8, 12) for a in range(0, 360, 45)]))
     # 也併入 neighbors(近的),多一層保險
     cand = {}
     for r in res:
@@ -57,8 +57,7 @@ def links_of(p):
     sec = {}
     for cid, la, lo, d, b in cand.values():
         k = round(b / 30) % 12
-        sc = abs(d - 10)
-        if k not in sec or sc < sec[k][0]: sec[k] = (sc, cid, la, lo, d, b)
+        if k not in sec or d < sec[k][0]: sec[k] = (d, cid, la, lo, d, b)
     return [{'id': cid, 'lat': la, 'lng': lo, 'heading': b, 'd': d, 'dz': 0}
             for _, cid, la, lo, d, b in sec.values()]
 
@@ -79,7 +78,7 @@ def handle(req):
         for n in (p.neighbors or []):
             if getattr(n, 'lat', None): pass
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
-                'yaw': (270 - math.degrees(p.heading or 0)) % 360,   # GPano 中央=90-heading;用戶實測反的→+180
+                'yaw': (90 - math.degrees(p.heading or 0)) % 360,   # GPano 中央方位=90-heading(讀組圖碼;用戶實測確認)
                 'date': str(p.date.date()) if p.date else None,
                 'street': getattr(p, 'street_name', '') or '',
                 'links': links_of(p)}
