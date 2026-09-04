@@ -3476,7 +3476,7 @@ addEventListener('keydown', e => {
   // 只改「顯示朝向」,不影響行進方向(道路照跑)。改了要重載目前這顆才套用新 yaw。
   else if (e.key === '\\' && ['apple','baidu','yandex','kakao'].includes(S.src)) {   // 整體前後翻 180°(反著走時按一下)
     S.aflip = (S.aflip + 180) % 360;
-    localStorage.setItem('pano-aflip4', S.aflip);
+    localStorage.setItem('pano-aflip5', S.aflip);
     S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
     S.note = `🔄 前後翻轉(${S.aflip ? '反' : '正'})`;
     S.noteHold = Date.now() + 4000; draw();
@@ -3484,7 +3484,7 @@ addEventListener('keydown', e => {
   else if ((e.key === '[' || e.key === ']') && ['apple','baidu','yandex','kakao'].includes(S.src)) {   // 微調 5°
     const d = e.key === ']' ? 15 : -15;
     S.aflip = ((S.aflip + d) % 360 + 360) % 360;
-    localStorage.setItem('pano-aflip4', S.aflip);
+    localStorage.setItem('pano-aflip5', S.aflip);
     S.laYaw = null; followCache.clear(); dropQueue(); fillQueue();
     S.note = `🧭 方位微調 ${S.aflip > 180 ? S.aflip - 360 : S.aflip}°([ ]±15 \\翻180)`;
     S.noteHold = Date.now() + 4000; draw();
@@ -3567,7 +3567,7 @@ addEventListener('keydown', () => { if (S.mic) startMic(); if (S.voice) startVoi
   if (q.get('src') === 'yandex') { S.src = 'yandex'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Yandex(俄羅斯等)
   if (q.get('src') === 'kakao') { S.src = 'kakao'; if (S.zoom > 3) S.zoom = 3; }   // 影像來源:Kakao(韓國)
   S.ayaw = 0;                                  // 種子:首顆朝行進方向選邊
-  S.aflip = localStorage.getItem('pano-aflip4') != null ? +localStorage.getItem('pano-aflip4') : 0;   // 整體前後(預設0=正前,實測);\\ 鍵切換記住
+  S.aflip = localStorage.getItem('pano-aflip5') != null ? +localStorage.getItem('pano-aflip5') : 0;   // 整體前後(預設0=正前,實測);\\ 鍵切換記住
   if (q.get('mini') === '0') S.mini = false;
   S.miniBig = q.get('mini') === 'big';        // 左螢幕:大張半透明小地圖
   S.photoSide = q.get('photos') === '1';      // 右螢幕:導覽照片放大置中

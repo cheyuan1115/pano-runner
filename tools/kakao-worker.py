@@ -63,7 +63,7 @@ def handle(req):
         p = get_by_id(req['id'])
         if not p: return {'error': 'unknown-pano'}
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
-                'yaw': (math.degrees(p.heading or 0)) % 360,   # 標準羅盤;中央方位待校準
+                'yaw': (math.degrees(p.heading or 0) + 180) % 360,   # 用戶按\確認:中央=heading+180
                 'date': str(p.date.date()) if p.date else None,
                 'street': getattr(p, 'street_name', '') or '',
                 'links': links_of(p)}
