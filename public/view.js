@@ -2734,12 +2734,12 @@ function updateAttr() {
   const el = document.getElementById('attr');
   if (!el) return;
   const d = S.cur?.meta?.date;
-  const ap = S.src === 'apple';
-  el.textContent = EN_UI
-    ? `Imagery © ${ap ? 'Apple Look Around' : 'Google Street View'}`
-      + (d ? ` (captured ${d[1]}/${d[0]})` : '') + '   Map © OpenStreetMap'
-    : `影像 © ${ap ? 'Apple Look Around' : 'Google 街景服務'}`
-      + (d ? `（${d[0]} 年 ${d[1]} 月拍攝）` : '') + '　地圖 © OpenStreetMap';
+  const srcN = S.src === 'apple' ? (EN_UI ? 'Apple Look Around' : 'Apple Look Around')
+             : S.src === 'baidu' ? (EN_UI ? 'Baidu Maps' : '百度地圖街景')
+             : (EN_UI ? 'Google Street View' : 'Google 街景服務');
+  el.textContent = (EN_UI ? 'Imagery © ' : '影像 © ') + srcN
+    + (d ? (EN_UI ? ` (captured ${d[1]}/${d[0]})` : `（${d[0]} 年 ${d[1]} 月拍攝）`) : '')
+    + (EN_UI ? '   Map © OpenStreetMap' : '　地圖 © OpenStreetMap');
 }
 
 // ── 左下角小地圖 ──────────────────────────────────────────────

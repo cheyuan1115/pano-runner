@@ -59,7 +59,7 @@ def handle(req):
         for n in (p.neighbors or []):
             if getattr(n, 'lat', None): pass
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
-                'yaw': (math.degrees(p.heading or 0)) % 360,   # 待校準(先給 heading)
+                'yaw': (90 - math.degrees(p.heading or 0)) % 360,   # GPano:中央方位=90-heading(讀 streetlevel 組圖碼)
                 'date': str(p.date.date()) if p.date else None,
                 'street': getattr(p, 'street_name', '') or '',
                 'links': links_of(p)}
