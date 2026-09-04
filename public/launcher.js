@@ -642,10 +642,26 @@ let SRC = ['apple', 'baidu', 'yandex', 'kakao'].includes(localStorage.getItem('p
   if (b) {
     const paint = () => { b.textContent = LABEL[SRC]; b.style.borderColor = SRC ? '#e08030' : ''; b.title = TIP[SRC]; };
     paint();
+    // 各地區來源的預設城市 + 大致範圍(已在範圍內就不跳,免得打斷微調)
+    const HOME = {
+      baidu:  { lat: 39.9087, lng: 116.3975, box: [18, 73, 54, 135], name: '中國·北京' },
+      yandex: { lat: 55.7539, lng: 37.6208,  box: [35, 19, 78, 180], name: '俄羅斯·莫斯科' },
+      kakao:  { lat: 37.5665, lng: 126.9780, box: [33, 124, 39, 132], name: '韓國·首爾' },
+    };
     b.onclick = () => {
       SRC = CYCLE[(CYCLE.indexOf(SRC) + 1) % CYCLE.length];
       localStorage.setItem('pano-src2', SRC || 'google');
       paint();
+      const h = HOME[SRC];
+      if (h) {
+        const [s, w2, n, e] = h.box;
+        const inside = V.lat >= s && V.lat <= n && V.lng >= w2 && V.lng <= e;
+        if (!inside) {                       // 不在該地區才跳過去
+          V.lat = h.lat; V.lng = h.lng; if (V.z < 15) V.z = 16;
+          const st = el('step'); if (st) st.textContent = '📍 已跳到 ' + h.name;
+          drawMap();
+        } else { drawMap(); }
+      } else { drawMap(); }                  // Google/Apple:全球,不跳,但重畫觸發涵蓋
     };
   }
 }
