@@ -78,7 +78,7 @@ def handle(req):
         for n in (p.neighbors or []):
             if getattr(n, 'lat', None): pass
         return {'id': str(p.id), 'lat': p.lat, 'lng': p.lon,
-                'yaw': (270 - math.degrees(p.heading or 0)) % 360,   # 用戶實測確認的正確值(90-heading 是反的)
+                'yaw': (math.degrees(p.heading or 0) + 90) % 360,   # 中央=heading+90(太陽斜率+1;純heading撞牆=差90印證)
                 'date': str(p.date.date()) if p.date else None,
                 'street': getattr(p, 'street_name', '') or '',
                 'links': links_of(p)}
